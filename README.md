@@ -303,33 +303,6 @@ This tool is intended for **authorized security testing only**.
 
 ---
 
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
----
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Credits
-
-- Original Python project: [HackUnderway/xss_scanner](https://github.com/HackUnderway/xss_scanner)
-- [chromedp](https://github.com/chromedp/chromedp) - Headless Chrome
-- [cobra](https://github.com/spf13/cobra) - CLI Framework
-- [color](https://github.com/fatih/color) - Terminal Colors
-
----
-
 <p align="center">
   Made with ❤️ by <a href="https://github.com/At0m1">@At0m1</a>
 </p>
