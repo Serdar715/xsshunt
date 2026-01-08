@@ -1,0 +1,29 @@
+# Binaries
+xsshunt
+xsshunt.exe
+xsshunt-test.exe
+*.exe
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dependencies
+vendor/
+
+# Test artifacts
+*.html
+*.json
+!go.mod
+!go.sum
+
+# Debug
+debug
+*.log
