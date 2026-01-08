@@ -187,6 +187,7 @@ func (s *Scanner) worker(wg *sync.WaitGroup, jobs <-chan string, baseURL, paramN
 func (s *Scanner) testPayload(testURL, payload, param string) (*config.Vulnerability, error) {
 	var htmlContent string
 	var dialogShown bool
+	var xssExecuted bool
 
 	// Create new context for this test
 	ctx, cancel := chromedp.NewContext(s.ctx)
@@ -197,6 +198,7 @@ func (s *Scanner) testPayload(testURL, payload, param string) (*config.Vulnerabi
 		switch ev.(type) {
 		case *page.EventJavascriptDialogOpening:
 			dialogShown = true
+			xssExecuted = true
 			// Automatically dismiss the dialog
 			go chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 				return page.HandleJavaScriptDialog(true).Do(ctx)
@@ -204,46 +206,91 @@ func (s *Scanner) testPayload(testURL, payload, param string) (*config.Vulnerabi
 		}
 	})
 
+	// Inject a unique marker to detect XSS execution
+	marker := fmt.Sprintf("XSSHUNT_%d", time.Now().UnixNano())
+
+	// Modify payloads to set a marker when executed
+	testPayload := strings.ReplaceAll(payload, "alert(1)", fmt.Sprintf("window['%s']=true", marker))
+	testPayload = strings.ReplaceAll(testPayload, "alert('XSS')", fmt.Sprintf("window['%s']=true", marker))
+
+	// Build test URL with modified payload
+	parsedURL, _ := url.Parse(testURL)
+	testParams := parsedURL.Query()
+	for key := range testParams {
+		testParams.Set(key, testPayload)
+	}
+	modifiedURL := fmt.Sprintf("%s://%s%s?%s", parsedURL.Scheme, parsedURL.Host, parsedURL.Path, testParams.Encode())
+
 	// Navigate and check for XSS
 	err := chromedp.Run(ctx,
-		chromedp.Navigate(testURL),
-		chromedp.Sleep(800*time.Millisecond),
+		chromedp.Navigate(modifiedURL),
+		chromedp.Sleep(1000*time.Millisecond),
 		chromedp.OuterHTML("html", &htmlContent),
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	// Check for reflected XSS
-	if s.checkReflectedXSS(htmlContent, payload) {
-		context := s.detectContext(htmlContent, payload)
+	// Check if our marker was set (confirms JavaScript execution)
+	var markerExists bool
+	checkScript := fmt.Sprintf("window['%s'] === true", marker)
+	chromedp.Run(ctx, chromedp.Evaluate(checkScript, &markerExists))
+
+	if markerExists {
+		xssExecuted = true
+	}
+
+	// PRIORITY 1: Confirmed JavaScript execution (DOM-based XSS)
+	if dialogShown || xssExecuted {
 		return &config.Vulnerability{
-			Type:        "Reflected XSS",
+			Type:        "DOM-based XSS (Confirmed)",
 			Payload:     payload,
 			URL:         testURL,
 			Parameter:   param,
-			Context:     context,
-			Severity:    s.calculateSeverity(context),
+			Context:     "JavaScript execution verified",
+			Severity:    "Critical",
 			WAFBypassed: s.results.WAFDetected != "",
-			Evidence:    extractEvidence(htmlContent, payload),
+			Evidence:    "JavaScript code executed successfully in browser",
 		}, nil
 	}
 
-	// Check for DOM-based XSS
-	if dialogShown || s.checkDOMXSS(ctx, payload) {
-		return &config.Vulnerability{
-			Type:        "DOM-based XSS",
-			Payload:     payload,
-			URL:         testURL,
-			Parameter:   param,
-			Context:     "JavaScript execution",
-			Severity:    "Critical",
-			WAFBypassed: s.results.WAFDetected != "",
-			Evidence:    "JavaScript alert/confirm/prompt triggered",
-		}, nil
+	// PRIORITY 2: Check for reflected XSS (payload in response without encoding)
+	// This is a potential vulnerability that needs manual verification
+	if s.checkReflectedXSS(htmlContent, payload) {
+		context := s.detectContext(htmlContent, payload)
+
+		// Only report if it's in a dangerous context
+		if s.isDangerousContext(context) {
+			return &config.Vulnerability{
+				Type:        "Reflected XSS (Potential)",
+				Payload:     payload,
+				URL:         testURL,
+				Parameter:   param,
+				Context:     context,
+				Severity:    s.calculateSeverity(context),
+				WAFBypassed: s.results.WAFDetected != "",
+				Evidence:    extractEvidence(htmlContent, payload),
+			}, nil
+		}
 	}
 
 	return nil, nil
+}
+
+// isDangerousContext checks if the injection context is dangerous
+func (s *Scanner) isDangerousContext(context string) bool {
+	dangerous := []string{
+		"JavaScript context",
+		"Event handler context",
+		"URL attribute context",
+		"HTML body context",
+	}
+	for _, d := range dangerous {
+		if context == d {
+			return true
+		}
+	}
+	return false
 }
 
 // checkReflectedXSS checks if payload is reflected in response
