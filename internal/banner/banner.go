@@ -16,7 +16,7 @@ func GetBanner() string {
 •▀▀ ▀▀ ▀▀▀▀  ▀▀▀▀    ▀▀▀ ·  ▀ • ▀▀ █▪ ▀▀▀ 
 `) + `
           ` + red(`XSSHunt - Advanced XSS Scanner v2.0`) + `
-                   ` + yellow(`by @At0m1`) + `
+                   ` + yellow(`by @Serdar715`) + `
 
 ` + cyan(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`) + `
   ` + yellow(`Features:`) + `

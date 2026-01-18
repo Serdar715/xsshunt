@@ -1,232 +1,111 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go Version">
+  <img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20macOS%20%7C%20Windows-blueviolet?style=for-the-badge" alt="Platform">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
-  <img src="https://img.shields.io/github/stars/At0m1/xsshunt?style=for-the-badge&color=yellow" alt="Stars">
+  <img src="https://img.shields.io/github/stars/Serdar715/xsshunt?style=for-the-badge&color=yellow" alt="Stars">
 </p>
 
-<h1 align="center">
-  <br>
-  🕵️ XSSHunt
-  <br>
-</h1>
-
-<h4 align="center">Advanced Cross-Site Scripting (XSS) Scanner with WAF Bypass Capabilities</h4>
-
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#usage">Usage</a> •
-  <a href="#waf-bypass">WAF Bypass</a> •
-  <a href="#screenshots">Screenshots</a> •
-  <a href="#contributing">Contributing</a>
-</p>
+<h1 align="center">🕵️ XSSHunt</h1>
+<p align="center"><b>Advanced XSS Vulnerability Scanner with WAF Bypass</b></p>
 
 ---
 
-## 📖 About
+## ⚡ Quick Install
 
-**XSSHunt** is a powerful, fast, and comprehensive XSS vulnerability scanner written in Go. It utilizes headless browser technology (Chromedp) to accurately detect both **Reflected XSS** and **DOM-based XSS** vulnerabilities. The tool includes advanced WAF bypass techniques and generates professional reports.
+```bash
+go install github.com/Serdar715/xsshunt/cmd/xsshunt@latest
+```
 
-> 🔄 This project is a Go port of [HackUnderway/xss_scanner](https://github.com/HackUnderway/xss_scanner)
+Or build from source:
+```bash
+git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go build -o xsshunt ./cmd/xsshunt
+```
+
+> **Requires:** Go 1.21+ and Chrome/Chromium
 
 ---
 
-## ✨ Features
+## 🎯 Features
 
-### 🎯 Detection Capabilities
-| Feature | Description |
-|---------|-------------|
-| **Reflected XSS** | Detects payloads reflected in HTTP responses |
-| **DOM-based XSS** | Uses real browser to detect JavaScript execution |
-| **Context-Aware** | Identifies injection context (HTML, JS, attribute, URL) |
-| **Smart Payloads** | Dynamically generates context-specific payloads |
-
-### 🛡️ WAF Bypass Support
-- ☁️ **Cloudflare**
-- 🔵 **Akamai**
-- 🌐 **AWS CloudFront**
-- 🔒 **Imperva / Incapsula**
-- 🛡️ **Wordfence**
-- ⚙️ **ModSecurity**
-- 🌿 **Sucuri**
-- 🔷 **F5 BIG-IP ASM**
-- 📦 **Barracuda**
-
-### 📊 Reporting
-- 📄 **JSON** - Machine-readable format for automation
-- 🌐 **HTML** - Beautiful, interactive reports with modern UI
-- 📋 Detailed vulnerability information with exploitation URLs
-
-### ⚡ Performance
-- 🚀 Concurrent scanning with configurable threads
-- 🎭 Headless browser for accurate DOM testing
-- ⏱️ Configurable timeouts
-- 🔄 Automatic WAF detection
-
----
-
-## 📦 Installation
-
-### Prerequisites
-- **Go 1.21+** - [Download Go](https://golang.org/dl/)
-- **Chrome/Chromium** - Required for headless browser testing
-
-### Quick Install
-
-```bash
-# Clone the repository
-git clone https://github.com/At0m1/xsshunt.git
-cd xsshunt
-
-# Download dependencies
-go mod tidy
-
-# Build
-make build
-
-# Or build directly
-go build -o xsshunt ./cmd/xsshunt
-
-# Install system-wide (optional)
-sudo make install
-```
-
-### Install Chrome/Chromium
-
-```bash
-# Debian/Ubuntu
-sudo apt update && sudo apt install -y chromium-browser
-
-# Arch Linux
-sudo pacman -S chromium
-
-# Fedora
-sudo dnf install chromium
-
-# macOS
-brew install --cask chromium
-```
-
-### One-liner Install
-
-```bash
-go install github.com/At0m1/xsshunt/cmd/xsshunt@latest
-```
+- **DOM & Reflected XSS Detection** - Real browser verification with minimal false positives
+- **WAF Bypass** - Cloudflare, Akamai, Imperva, ModSecurity, Sucuri, F5, and more
+- **Proxy Support** - Burp Suite, OWASP ZAP integration
+- **Authenticated Scanning** - Cookie and header-based authentication
+- **Header Fuzzing** - Test XSS in HTTP headers with `FUZZ` marker
+- **Batch Scanning** - Scan multiple URLs from file
+- **Rate Limiting** - Configurable delays to avoid detection
 
 ---
 
 ## 🚀 Usage
 
-### Basic Scan
-
+### Basic
 ```bash
-# Simple scan with auto WAF detection
 xsshunt "https://target.com/search?q="
-
-# Scan with verbose output
-xsshunt "https://target.com/search?q=" --verbose
 ```
 
-### WAF-Specific Scan
-
+### With Proxy (Burp Suite)
 ```bash
-# Target behind Cloudflare
-xsshunt "https://target.com/search?q=" -w cloudflare
-
-# Target behind Akamai
-xsshunt "https://target.com/search?q=" -w akamai
-
-# Auto-detect WAF
-xsshunt "https://target.com/search?q=" -w auto
+xsshunt "https://target.com/search?q=" --proxy http://127.0.0.1:8080
 ```
 
-### Advanced Options
-
+### Authenticated Scan
 ```bash
-# Custom payload file
-xsshunt "https://target.com/search?q=" -p custom_payloads.txt
-
-# Visible browser mode (for debugging)
-xsshunt "https://target.com/search?q=" -v
-
-# Multi-threaded scan
-xsshunt "https://target.com/search?q=" -t 10
-
-# Generate HTML report
-xsshunt "https://target.com/search?q=" -o report.html --format html
-
-# Generate JSON report
-xsshunt "https://target.com/search?q=" -o report.json --format json
+xsshunt "https://target.com/search?q=" -c "session=abc123" --auth "Bearer token"
 ```
 
-### All Options
-
+### Header Fuzzing
+```bash
+xsshunt "https://target.com/api" -H "X-Forwarded-For: FUZZ" -H "Referer: FUZZ"
 ```
-Usage:
-  xsshunt [target_url] [flags]
 
-Flags:
-  -p, --payloads string   Custom payload file path
-  -v, --visible           Run browser in visible mode
-  -w, --waf string        WAF type: auto, cloudflare, akamai, cloudfront,
-                          imperva, wordfence, modsecurity, sucuri, f5 (default "auto")
-      --no-smart          Disable smart payload generation
-      --format string     Output format: json, html (default "json")
-  -o, --output string     Output file for report
-  -t, --threads int       Number of concurrent threads (default 5)
-      --timeout int       Request timeout in seconds (default 30)
-      --verbose           Enable verbose output
-  -h, --help              Show help message
+### Batch Scan
+```bash
+xsshunt -l urls.txt -o report.html --format html
+```
+
+### Rate Limited (Stealth)
+```bash
+xsshunt "https://target.com/search?q=" --delay 1000 -t 2
+```
+
+### Full Example
+```bash
+xsshunt "https://target.com/search?q=" \
+  --proxy http://127.0.0.1:8080 \
+  -c "session=abc" \
+  -H "X-Custom: FUZZ" \
+  -w cloudflare \
+  -t 10 \
+  --delay 500 \
+  -o report.html --format html
 ```
 
 ---
 
-## 🛡️ WAF Bypass
+## 📋 Options
 
-XSSHunt includes specialized payloads designed to bypass common Web Application Firewalls:
-
-### Bypass Techniques Used
-
-| WAF | Techniques |
-|-----|------------|
-| **Cloudflare** | HTML entity encoding, Unicode escapes, eval obfuscation |
-| **Akamai** | Case variation, null bytes, alternative event handlers |
-| **CloudFront** | String.fromCharCode, template literals, regex tricks |
-| **Imperva** | Comment injection, constructor chains, form actions |
-| **ModSecurity** | Hex encoding, Unicode, base64 eval |
-
-### Example Bypass Payloads
-
-```html
-<!-- Cloudflare Bypass -->
-<svg/onload=&#97&#108&#101&#114&#116(1)>
-<svg onload=eval(atob('YWxlcnQoMSk='))>
-
-<!-- Akamai Bypass -->
-<body/onload=alert(1)>
-<input/onfocus=alert(1) autofocus>
-
-<!-- Generic Bypass -->
-<script>onerror=alert;throw 1</script>
-```
+| Flag | Description |
+|------|-------------|
+| `-l, --list` | File containing URLs to scan |
+| `-p, --payloads` | Custom payload file |
+| `-w, --waf` | WAF type (auto, cloudflare, akamai, imperva, etc.) |
+| `-t, --threads` | Concurrent threads (default: 5) |
+| `--delay` | Delay between requests in ms |
+| `--proxy` | Proxy URL (http://host:port) |
+| `-c, --cookie` | Cookie header value |
+| `--auth` | Authorization header |
+| `-H, --header` | Header to fuzz (use FUZZ marker) |
+| `-o, --output` | Output file |
+| `--format` | Output format (json, html) |
+| `-v, --visible` | Show browser window |
+| `--verbose` | Verbose output |
 
 ---
 
-## 🧪 Testing
+## 🛡️ Supported WAFs
 
-### Safe Testing Targets
-
-```bash
-# Acunetix Test Site (Intentionally Vulnerable)
-xsshunt "https://testphp.vulnweb.com/artists.php?artist="
-
-# PortSwigger XSS Labs
-xsshunt "https://portswigger-labs.net/xss/xss.php?x="
-
-# OWASP WebGoat (Local)
-xsshunt "http://localhost:8080/WebGoat/start.mvc?param="
-```
+Cloudflare • Akamai • AWS WAF • Imperva • Wordfence • ModSecurity • Sucuri • F5 BIG-IP • Barracuda
 
 ---
 
@@ -234,75 +113,25 @@ xsshunt "http://localhost:8080/WebGoat/start.mvc?param="
 
 ```
 xsshunt/
-├── cmd/
-│   └── xsshunt/
-│       └── main.go              # Entry point
+├── cmd/xsshunt/main.go      # Entry point
 ├── internal/
-│   ├── banner/
-│   │   └── banner.go            # ASCII art banner
-│   ├── cli/
-│   │   └── cli.go               # CLI argument handling
-│   ├── config/
-│   │   └── config.go            # Configuration structures
-│   ├── payloads/
-│   │   └── generator.go         # Payload generation & WAF bypass
-│   ├── report/
-│   │   └── report.go            # Report generation (JSON/HTML)
-│   ├── scanner/
-│   │   └── scanner.go           # Core scanning engine
-│   └── waf/
-│       └── detector.go          # WAF detection module
-├── Makefile                     # Build automation
-├── go.mod
-├── go.sum
+│   ├── scanner/             # Core XSS detection engine
+│   ├── payloads/            # WAF bypass payloads
+│   ├── waf/                 # WAF detection
+│   ├── report/              # HTML/JSON reports
+│   └── cli/                 # CLI handling
 └── README.md
 ```
 
 ---
 
-## 🔧 Build Options
+## ⚠️ Disclaimer
 
-```bash
-# Build for current platform
-make build
-
-# Build for Linux (amd64 & arm64)
-make build-linux
-
-# Build for Windows
-make build-windows
-
-# Build for macOS
-make build-darwin
-
-# Build for all platforms
-make build-all
-
-# Clean build artifacts
-make clean
-```
-
----
-
-## ⚠️ Legal Disclaimer
-
-This tool is intended for **authorized security testing only**. 
-
-✅ **Allowed Use:**
-- Your own systems and applications
-- Systems you have explicit written permission to test
-- Bug bounty programs where you are authorized
-- Educational and research purposes in controlled environments
-
-❌ **Prohibited Use:**
-- Unauthorized testing of third-party systems
-- Any use that violates applicable laws
-- Malicious activities
-
-**The developers assume no liability for misuse of this tool.**
+**Authorized testing only.** Only use on systems you own or have explicit permission to test. The developers assume no liability for misuse.
 
 ---
 
 <p align="center">
-  Made with ❤️ by <a href="https://github.com/At0m1">@At0m1</a>
+  Made by <a href="https://github.com/Serdar715">@Serdar715</a> • 
+  <a href="https://github.com/Serdar715/xsshunt/issues">Report Bug</a>
 </p>
