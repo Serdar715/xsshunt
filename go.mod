@@ -1,4 +1,4 @@
-module xsshunt
+module github.com/Serdar715/xsshunt
 
 go 1.21
 

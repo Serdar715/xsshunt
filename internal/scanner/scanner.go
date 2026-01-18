@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"xsshunt/internal/config"
-	"xsshunt/internal/payloads"
-	"xsshunt/internal/waf"
+	"github.com/Serdar715/xsshunt/internal/config"
+	"github.com/Serdar715/xsshunt/internal/payloads"
+	"github.com/Serdar715/xsshunt/internal/waf"
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"xsshunt/internal/config"
+	"github.com/Serdar715/xsshunt/internal/config"
 )
 
 // Reporter generates scan reports in various formats

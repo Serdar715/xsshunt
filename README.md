@@ -16,9 +16,11 @@
 go install github.com/Serdar715/xsshunt/cmd/xsshunt@latest
 ```
 
-Or build from source:
+**Build from source:**
 ```bash
-git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go build -o xsshunt ./cmd/xsshunt
+git clone https://github.com/Serdar715/xsshunt.git
+cd xsshunt
+go build -o xsshunt ./cmd/xsshunt
 ```
 
 > **Requires:** Go 1.21+ and Chrome/Chromium
@@ -39,46 +41,24 @@ git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go build -o 
 
 ## 🚀 Usage
 
-### Basic
 ```bash
+# Basic scan
 xsshunt "https://target.com/search?q="
-```
 
-### With Proxy (Burp Suite)
-```bash
+# With Proxy (Burp Suite)
 xsshunt "https://target.com/search?q=" --proxy http://127.0.0.1:8080
-```
 
-### Authenticated Scan
-```bash
+# Authenticated scan
 xsshunt "https://target.com/search?q=" -c "session=abc123" --auth "Bearer token"
-```
 
-### Header Fuzzing
-```bash
-xsshunt "https://target.com/api" -H "X-Forwarded-For: FUZZ" -H "Referer: FUZZ"
-```
+# Header fuzzing
+xsshunt "https://target.com/api" -H "X-Forwarded-For: FUZZ"
 
-### Batch Scan
-```bash
+# Batch scan from file
 xsshunt -l urls.txt -o report.html --format html
-```
 
-### Rate Limited (Stealth)
-```bash
-xsshunt "https://target.com/search?q=" --delay 1000 -t 2
-```
-
-### Full Example
-```bash
-xsshunt "https://target.com/search?q=" \
-  --proxy http://127.0.0.1:8080 \
-  -c "session=abc" \
-  -H "X-Custom: FUZZ" \
-  -w cloudflare \
-  -t 10 \
-  --delay 500 \
-  -o report.html --format html
+# Rate limited scan
+xsshunt "https://target.com/search?q=" --delay 500 -t 2
 ```
 
 ---
@@ -103,35 +83,12 @@ xsshunt "https://target.com/search?q=" \
 
 ---
 
-## 🛡️ Supported WAFs
-
-Cloudflare • Akamai • AWS WAF • Imperva • Wordfence • ModSecurity • Sucuri • F5 BIG-IP • Barracuda
-
----
-
-## 📁 Project Structure
-
-```
-xsshunt/
-├── cmd/xsshunt/main.go      # Entry point
-├── internal/
-│   ├── scanner/             # Core XSS detection engine
-│   ├── payloads/            # WAF bypass payloads
-│   ├── waf/                 # WAF detection
-│   ├── report/              # HTML/JSON reports
-│   └── cli/                 # CLI handling
-└── README.md
-```
-
----
-
 ## ⚠️ Disclaimer
 
-**Authorized testing only.** Only use on systems you own or have explicit permission to test. The developers assume no liability for misuse.
+**Authorized testing only.** Only use on systems you own or have explicit permission to test.
 
 ---
 
 <p align="center">
-  Made by <a href="https://github.com/Serdar715">@Serdar715</a> • 
-  <a href="https://github.com/Serdar715/xsshunt/issues">Report Bug</a>
+  Made by <a href="https://github.com/Serdar715">@Serdar715</a>
 </p>

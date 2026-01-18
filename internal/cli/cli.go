@@ -6,10 +6,10 @@ import (
 	"os"
 	"strings"
 
-	"xsshunt/internal/banner"
-	"xsshunt/internal/config"
-	"xsshunt/internal/report"
-	"xsshunt/internal/scanner"
+	"github.com/Serdar715/xsshunt/internal/banner"
+	"github.com/Serdar715/xsshunt/internal/config"
+	"github.com/Serdar715/xsshunt/internal/report"
+	"github.com/Serdar715/xsshunt/internal/scanner"
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
