@@ -164,8 +164,19 @@ func (s *Scanner) Scan() (*config.ScanResult, error) {
 	for paramName := range params {
 		color.Cyan("\n[*] Testing parameter: %s", paramName)
 
+		// Intelligent Analysis: Probe parameter for context and filtering
+		probeResult := s.analyzeParameter(baseURL, paramName, params)
+		optimizedPayloads := s.filterPayloads(payloadList, probeResult)
+
+		if len(optimizedPayloads) == 0 {
+			if s.config.Verbose {
+				color.Yellow("  [!] No suitable payloads found after analysis (strict filtering detected)")
+			}
+			continue
+		}
+
 		// Use worker pool for concurrent testing
-		jobChan := make(chan string, len(payloadList))
+		jobChan := make(chan string, len(optimizedPayloads))
 		var wg sync.WaitGroup
 
 		// Start workers
@@ -175,7 +186,7 @@ func (s *Scanner) Scan() (*config.ScanResult, error) {
 		}
 
 		// Send jobs
-		for _, payload := range payloadList {
+		for _, payload := range optimizedPayloads {
 			jobChan <- payload
 		}
 		close(jobChan)
@@ -966,6 +977,8 @@ func (s *Scanner) injectMarker(payload, marker string) string {
 		"alert(\"XSS\")": fmt.Sprintf("(window['%s']=true)", marker),
 		"confirm(1)":     fmt.Sprintf("(window['%s']=true)", marker),
 		"prompt(1)":      fmt.Sprintf("(window['%s']=true)", marker),
+		"confirm()":      fmt.Sprintf("(window['%s']=true)", marker),
+		"confirm``":      fmt.Sprintf("(window['%s']=true)", marker),
 	}
 
 	result := payload

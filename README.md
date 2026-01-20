@@ -29,6 +29,8 @@ go build -o xsshunt ./cmd/xsshunt
 
 ## 🎯 Features
 
+- **Smart Probing Engine** - Intelligent context analysis to eliminate false positives
+- **AwesomeXSS Integration** - Advanced Polyglots, Confirm Variants, and Context Breaking payloads
 - **DOM & Reflected XSS Detection** - Real browser verification with minimal false positives
 - **WAF Bypass** - Cloudflare, Akamai, Imperva, ModSecurity, Sucuri, F5, and more
 - **Proxy Support** - Burp Suite, OWASP ZAP integration

