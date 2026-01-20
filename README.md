@@ -12,15 +12,14 @@
 
 ## ⚡ Quick Install
 
+### One-Command Build
 ```bash
-go install github.com/Serdar715/xsshunt/cmd/xsshunt@latest
+git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go mod tidy && go build -o xsshunt ./cmd/xsshunt
 ```
 
-**Build from source:**
+### Go Install
 ```bash
-git clone https://github.com/Serdar715/xsshunt.git
-cd xsshunt
-go build -o xsshunt ./cmd/xsshunt
+go install github.com/Serdar715/xsshunt/cmd/xsshunt@master
 ```
 
 > **Requires:** Go 1.21+ and Chrome/Chromium
