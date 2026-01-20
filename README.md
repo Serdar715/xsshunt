@@ -14,12 +14,12 @@
 
 ### One-Command Build
 ```bash
-git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go mod tidy && go build -o xsshunt cmd/xsshunt/main.go
+git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go mod tidy && go build -o xsshunt ./cmd/xsshunt/main.go
 ```
 
 ### Go Install
 ```bash
-go install github.com/Serdar715/xsshunt/cmd/xsshunt@master
+GOPROXY=direct go install github.com/Serdar715/xsshunt/cmd/xsshunt@master
 ```
 
 > **Requires:** Go 1.21+ and Chrome/Chromium
