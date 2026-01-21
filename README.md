@@ -20,7 +20,7 @@ git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go build -o 
 
 ### Windows (PowerShell One-Line)
 ```powershell
-git clone https://github.com/Serdar715/xsshunt.git; cd xsshunt; go build -o xsshunt.exe ./cmd/xsshunt
+git clone https://github.com/Serdar715/xsshunt.git; cd xsshunt; go build -o xsshunt.exe .\cmd\xsshunt
 ```
 
 > **Requirements:** Go 1.21+ and Chrome/Chromium
