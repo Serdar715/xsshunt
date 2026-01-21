@@ -13,16 +13,7 @@
 
 ## ⚡ Quick Install
 
-### Option 1: Go Install (Recommended)
-```bash
-# Linux/macOS/WSL
-GO111MODULE=on go install github.com/Serdar715/xsshunt/cmd/xsshunt@latest
-
-# Windows (PowerShell)
-$env:GO111MODULE="on"; go install github.com/Serdar715/xsshunt/cmd/xsshunt@latest
-```
-
-### Option 2: Clone & Build
+### Option 1: Clone & Build (Recommended)
 ```bash
 # Clone repository
 git clone https://github.com/Serdar715/xsshunt.git
@@ -35,12 +26,18 @@ go build -o xsshunt ./cmd/xsshunt
 # Linux/macOS: Install to PATH
 sudo mv xsshunt /usr/local/bin/
 
-# Windows: Add current directory to PATH or move xsshunt.exe to a PATH directory
+# Windows: The executable will be xsshunt.exe in current directory
+# You can add the directory to PATH or move it to a PATH directory
 ```
 
-### Option 3: One-Line Install (Linux/macOS)
+### Option 2: One-Line Install (Linux/macOS)
 ```bash
 git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go mod tidy && go build -o xsshunt ./cmd/xsshunt && sudo mv xsshunt /usr/local/bin/
+```
+
+### Option 3: One-Line Build (Windows PowerShell)
+```powershell
+git clone https://github.com/Serdar715/xsshunt.git; cd xsshunt; go mod tidy; go build -o xsshunt.exe ./cmd/xsshunt
 ```
 
 ### Option 4: Using Makefile
@@ -48,6 +45,12 @@ git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go mod tidy 
 git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt
 make build         # Build for current platform
 sudo make install  # Install to /usr/local/bin (Linux/macOS)
+```
+
+### Option 5: Go Install (after module is indexed)
+```bash
+# Note: May take 30+ minutes after new releases for Go proxy to update
+GO111MODULE=on go install github.com/Serdar715/xsshunt/cmd/xsshunt@latest
 ```
 
 > **Requirements:** 
