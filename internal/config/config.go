@@ -47,6 +47,23 @@ type ScanConfig struct {
 
 	// Rate limiting
 	Delay int // Delay between requests in milliseconds
+
+	// Blind XSS configuration
+	BlindXSSCallback string // Callback URL for blind XSS detection (e.g., yourserver.xsshunter.com)
+	BlindXSSEnabled  bool   // Whether blind XSS testing is enabled
+
+	// Additional vulnerability scanning (Dalfox-inspired)
+	ScanSSTI         bool // Scan for Server Side Template Injection
+	ScanOpenRedirect bool // Scan for Open Redirect vulnerabilities
+	CheckSecHeaders  bool // Check security headers
+
+	// Advanced options
+	FuzzyMatching   bool    // Enable fuzzy matching for payload detection
+	FuzzyThreshold  float64 // Threshold for fuzzy matching (0.0-1.0)
+	StoredXSS       bool    // Enable stored XSS testing mode
+	DOMDeepScan     bool    // Enable deep DOM analysis
+	FollowRedirects bool    // Follow HTTP redirects during scanning
+	MaxRedirects    int     // Maximum number of redirects to follow
 }
 
 // Vulnerability represents a detected XSS vulnerability
@@ -102,14 +119,22 @@ type PayloadContext struct {
 // DefaultConfig returns a default scan configuration
 func DefaultConfig() *ScanConfig {
 	return &ScanConfig{
-		WAFType:      "auto",
-		SmartPayload: true,
-		OutputFormat: "json",
-		Threads:      5,
-		Timeout:      30,
-		Verbose:      false,
-		ProxyEnabled: false,
-		Headers:      make(map[string]string),
-		Delay:        0,
+		WAFType:          "auto",
+		SmartPayload:     true,
+		OutputFormat:     "json",
+		Threads:          5,
+		Timeout:          30,
+		Verbose:          false,
+		ProxyEnabled:     false,
+		Headers:          make(map[string]string),
+		Delay:            0,
+		FuzzyMatching:    true,
+		FuzzyThreshold:   0.8,
+		ScanSSTI:         false,
+		ScanOpenRedirect: false,
+		CheckSecHeaders:  true,
+		DOMDeepScan:      true,
+		FollowRedirects:  false,
+		MaxRedirects:     3,
 	}
 }

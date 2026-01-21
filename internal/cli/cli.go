@@ -50,6 +50,20 @@ var (
 
 	// Header Fuzzing options
 	fuzzHeaders []string
+
+	// Blind XSS options
+	blindCallback string
+
+	// Additional vulnerability scanning (Dalfox-inspired)
+	scanSSTI         bool
+	scanOpenRedirect bool
+	checkSecHeaders  bool
+
+	// Advanced options
+	fuzzyMatching  bool
+	fuzzyThreshold float64
+	storedXSS      bool
+	domDeepScan    bool
 )
 
 func Execute() error {
@@ -239,26 +253,35 @@ Features:
 
 			// Create scanner config
 			cfg := &config.ScanConfig{
-				TargetURL:    targetURLs[0],
-				TargetURLs:   targetURLs,
-				URLListFile:  urlListFile,
-				PayloadFile:  payloadFile,
-				VisibleMode:  visibleMode,
-				WAFType:      wafType,
-				SmartPayload: !noSmart,
-				OutputFormat: outputFormat,
-				OutputFile:   outputFile,
-				Threads:      threads,
-				Timeout:      timeout,
-				Verbose:      verbose,
-				ProxyURL:     proxyURL,
-				ProxyEnabled: proxyURL != "",
-				Cookies:      cookies,
-				Headers:      customHeaders,
-				AuthHeader:   authHeader,
-				Delay:        delay,
-				FuzzHeaders:  fuzzHeaders,
-				FuzzMode:     hasFuzzHeaders,
+				TargetURL:        targetURLs[0],
+				TargetURLs:       targetURLs,
+				URLListFile:      urlListFile,
+				PayloadFile:      payloadFile,
+				VisibleMode:      visibleMode,
+				WAFType:          wafType,
+				SmartPayload:     !noSmart,
+				OutputFormat:     outputFormat,
+				OutputFile:       outputFile,
+				Threads:          threads,
+				Timeout:          timeout,
+				Verbose:          verbose,
+				ProxyURL:         proxyURL,
+				ProxyEnabled:     proxyURL != "",
+				Cookies:          cookies,
+				Headers:          customHeaders,
+				AuthHeader:       authHeader,
+				Delay:            delay,
+				FuzzHeaders:      fuzzHeaders,
+				FuzzMode:         hasFuzzHeaders,
+				BlindXSSCallback: blindCallback,
+				BlindXSSEnabled:  blindCallback != "",
+				ScanSSTI:         scanSSTI,
+				ScanOpenRedirect: scanOpenRedirect,
+				CheckSecHeaders:  checkSecHeaders,
+				FuzzyMatching:    fuzzyMatching,
+				FuzzyThreshold:   fuzzyThreshold,
+				StoredXSS:        storedXSS,
+				DOMDeepScan:      domDeepScan,
 			}
 
 			// Print configuration summary
@@ -357,6 +380,20 @@ Features:
 
 	// Header Fuzzing flags
 	rootCmd.Flags().StringArrayVarP(&fuzzHeaders, "header", "H", []string{}, "Header to fuzz with FUZZ marker (e.g., \"X-Custom: FUZZ\"). Can be used multiple times.")
+
+	// Blind XSS flags
+	rootCmd.Flags().StringVar(&blindCallback, "blind-callback", "", "Callback URL for blind XSS detection (e.g., yourserver.xsshunter.com)")
+
+	// Additional vulnerability scanning flags (Dalfox-inspired)
+	rootCmd.Flags().BoolVar(&scanSSTI, "ssti", false, "Also scan for Server Side Template Injection (SSTI)")
+	rootCmd.Flags().BoolVar(&scanOpenRedirect, "open-redirect", false, "Also scan for Open Redirect vulnerabilities")
+	rootCmd.Flags().BoolVar(&checkSecHeaders, "check-headers", true, "Check security headers (CSP, X-Frame-Options, etc.)")
+
+	// Advanced options flags
+	rootCmd.Flags().BoolVar(&fuzzyMatching, "fuzzy", true, "Enable fuzzy matching for payload detection (XSStrike-style)")
+	rootCmd.Flags().Float64Var(&fuzzyThreshold, "fuzzy-threshold", 0.8, "Threshold for fuzzy matching (0.0-1.0)")
+	rootCmd.Flags().BoolVar(&storedXSS, "stored", false, "Enable stored XSS testing mode")
+	rootCmd.Flags().BoolVar(&domDeepScan, "dom-deep", true, "Enable deep DOM analysis")
 
 	return rootCmd.Execute()
 }
