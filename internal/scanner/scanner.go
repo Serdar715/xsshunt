@@ -3,11 +3,13 @@ package scanner
 import (
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
+	"math/big"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -25,11 +27,19 @@ import (
 	"github.com/fatih/color"
 )
 
+const (
+	DefaultBrowserWaitTime = 1500 * time.Millisecond
+	EvidenceContextRadius  = 50
+	ContextDetectionRadius = 100
+	RandomStringLength     = 8
+)
+
 // Scanner is the main XSS scanner with proxy and auth support
 type Scanner struct {
 	config      *config.ScanConfig
 	ctx         context.Context
 	cancel      context.CancelFunc
+	allocCancel context.CancelFunc // Dedicated cancel for the allocator
 	payloadGen  *payloads.Generator
 	wafDetector *waf.Detector
 	results     *config.ScanResult
@@ -68,7 +78,7 @@ func New(cfg *config.ScanConfig) (*Scanner, error) {
 		color.Yellow("[*] Using proxy: %s", cfg.ProxyURL)
 	}
 
-	allocCtx, _ := chromedp.NewExecAllocator(context.Background(), opts...)
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
 
 	// Create context with error logging disabled
 	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(func(format string, args ...interface{}) {}))
@@ -83,6 +93,7 @@ func New(cfg *config.ScanConfig) (*Scanner, error) {
 		config:      cfg,
 		ctx:         ctx,
 		cancel:      cancel,
+		allocCancel: allocCancel,
 		payloadGen:  payloads.NewGenerator(cfg.SmartPayload),
 		wafDetector: wafDet,
 		results: &config.ScanResult{
@@ -104,6 +115,9 @@ func New(cfg *config.ScanConfig) (*Scanner, error) {
 func (s *Scanner) Close() {
 	if s.cancel != nil {
 		s.cancel()
+	}
+	if s.allocCancel != nil {
+		s.allocCancel()
 	}
 }
 
@@ -358,7 +372,7 @@ func (s *Scanner) testHeaderPayload(headerName, headerValue, originalPayload str
 	// Navigate and check for XSS
 	err = chromedp.Run(ctx,
 		chromedp.Navigate(s.config.TargetURL),
-		chromedp.Sleep(1500*time.Millisecond),
+		chromedp.Sleep(DefaultBrowserWaitTime),
 		chromedp.OuterHTML("html", &htmlContent),
 	)
 	if err != nil {
@@ -543,7 +557,7 @@ func (s *Scanner) testPayload(testURL, payload, param string) (*config.Vulnerabi
 	// Navigate and check for XSS
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(modifiedURL),
-		chromedp.Sleep(1500*time.Millisecond), // Wait for JS execution
+		chromedp.Sleep(DefaultBrowserWaitTime), // Wait for JS execution
 		chromedp.OuterHTML("html", &htmlContent),
 	)
 	if err != nil {
@@ -761,11 +775,11 @@ func (s *Scanner) detectContextAdvanced(html, payload string) string {
 		return "Unknown"
 	}
 
-	start := idx - 100
+	start := idx - ContextDetectionRadius
 	if start < 0 {
 		start = 0
 	}
-	end := idx + len(payload) + 100
+	end := idx + len(payload) + ContextDetectionRadius
 	if end > len(lowerHTML) {
 		end = len(lowerHTML)
 	}
@@ -776,7 +790,8 @@ func (s *Scanner) detectContextAdvanced(html, payload string) string {
 	scriptOpenRe := regexp.MustCompile(`<script[^>]*>`)
 	scriptCloseRe := regexp.MustCompile(`</script>`)
 
-	if scriptOpenRe.MatchString(before) && !scriptCloseRe.MatchString(before[strings.LastIndex(before, "<script"):]) {
+	lastScriptIdx := strings.LastIndex(before, "<script")
+	if lastScriptIdx != -1 && scriptOpenRe.MatchString(before) && !scriptCloseRe.MatchString(before[lastScriptIdx:]) {
 		return "JavaScript context"
 	}
 
@@ -956,17 +971,49 @@ func (s *Scanner) canInjectHTMLTags(payload, html string) bool {
 
 // canBreakOutOfAttribute checks if we can break out of an HTML attribute
 func (s *Scanner) canBreakOutOfAttribute(payload, html string) bool {
-	breakoutPatterns := []string{`"`, `'`, `>`, `/>`}
-
-	for _, pattern := range breakoutPatterns {
-		if strings.Contains(payload, pattern) {
-			if strings.Contains(html, payload) {
-				return true
-			}
-		}
+	idx := strings.Index(html, payload)
+	if idx == -1 {
+		return false
 	}
 
-	return false
+	// Limit search window to find the attribute definition
+	startSearch := idx - 100
+	if startSearch < 0 {
+		startSearch = 0
+	}
+	before := html[startSearch:idx]
+
+	// Find the last equals sign which likely denotes the attribute assignment
+	lastEquals := strings.LastIndex(before, "=")
+	if lastEquals == -1 {
+		// Fallback to strict check if we can't find the structure
+		return strings.ContainsAny(payload, `"'><`)
+	}
+
+	// Check what follows the equals sign (ignoring whitespace)
+	// We want to find the opening quote of the attribute
+	afterEquals := strings.TrimLeft(before[lastEquals+1:], " \t\n\r")
+
+	if len(afterEquals) == 0 {
+		// Case: name=PAYLOAD (Unquoted)
+		// Dangerous chars: space, >, slash, tag start
+		return strings.ContainsAny(payload, " />\t\n")
+	}
+
+	quoteChar := afterEquals[0]
+	if quoteChar == '"' {
+		// Case: name="PAYLOAD (Double quoted)
+		// Only " breaks out. ' is safe.
+		return strings.Contains(payload, "\"")
+	} else if quoteChar == '\'' {
+		// Case: name='PAYLOAD (Single quoted)
+		// Only ' breaks out. " is safe.
+		return strings.Contains(payload, "'")
+	} else {
+		// Case: name=valPAYLOAD (Unquoted or part of value)
+		// Treated as unquoted: space, >, etc. break out
+		return strings.ContainsAny(payload, " />\t\n")
+	}
 }
 
 // injectMarker adds a unique marker to the payload for verification
@@ -1012,11 +1059,11 @@ func extractEvidence(html, payload string) string {
 		return ""
 	}
 
-	start := idx - 50
+	start := idx - EvidenceContextRadius
 	if start < 0 {
 		start = 0
 	}
-	end := idx + len(payload) + 50
+	end := idx + len(payload) + EvidenceContextRadius
 	if end > len(html) {
 		end = len(html)
 	}
@@ -1026,12 +1073,17 @@ func extractEvidence(html, payload string) string {
 
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[time.Now().UnixNano()%int64(len(letters))]
-		time.Sleep(1 * time.Nanosecond)
+	ret := make([]byte, n)
+	for i := 0; i < n; i++ {
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		if err != nil {
+			// Fallback in extremely rare case of crypto/rand failure, or handle error better
+			// For this context, we'll just skip (or could panic/log)
+			return "fallback_id"
+		}
+		ret[i] = letters[num.Int64()]
 	}
-	return string(b)
+	return string(ret)
 }
 
 // CreateHTTPClient creates an HTTP client with proxy support

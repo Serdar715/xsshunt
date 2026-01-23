@@ -38,8 +38,11 @@ func (g *Generator) LoadFromFile(filepath string) ([]string, error) {
 
 // GetPayloads returns payloads optimized for the detected WAF
 func (g *Generator) GetPayloads(wafType string) []string {
+	// Pre-allocate slice with estimated capacity to reduce reallocations
+	payloads := make([]string, 0, 500)
+
 	// Start with high-confidence base payloads
-	payloads := g.getBasePayloads()
+	payloads = append(payloads, g.getBasePayloads()...)
 
 	// Add AwesomeXSS specific payloads
 	payloads = append(payloads, g.getAwesomeConfirmVariants()...)
@@ -52,27 +55,7 @@ func (g *Generator) GetPayloads(wafType string) []string {
 	payloads = append(payloads, g.getMutationXSSPayloads()...)
 
 	// Add WAF-specific bypass payloads
-	switch strings.ToLower(wafType) {
-	case "cloudflare":
-		payloads = append(payloads, g.getCloudflareBypass()...)
-	case "akamai":
-		payloads = append(payloads, g.getAkamaiBypass()...)
-	case "cloudfront", "aws-waf":
-		payloads = append(payloads, g.getCloudfrontBypass()...)
-	case "imperva", "incapsula":
-		payloads = append(payloads, g.getImpervaBypass()...)
-	case "wordfence":
-		payloads = append(payloads, g.getWordfenceBypass()...)
-	case "modsecurity":
-		payloads = append(payloads, g.getModSecurityBypass()...)
-	case "sucuri":
-		payloads = append(payloads, g.getSucuriBypass()...)
-	case "f5":
-		payloads = append(payloads, g.getF5Bypass()...)
-	default:
-		// Unknown or no WAF - use comprehensive bypass set
-		payloads = append(payloads, g.getAllBypass()...)
-	}
+	payloads = append(payloads, g.getWAFSpecificPayloads(wafType)...)
 
 	// Add smart/polyglot payloads if enabled
 	if g.smartMode {
@@ -83,6 +66,31 @@ func (g *Generator) GetPayloads(wafType string) []string {
 	}
 
 	return g.deduplicate(payloads)
+}
+
+// getWAFSpecificPayloads returns bypass payloads for the specific WAF
+func (g *Generator) getWAFSpecificPayloads(wafType string) []string {
+	switch strings.ToLower(wafType) {
+	case "cloudflare":
+		return g.getCloudflareBypass()
+	case "akamai":
+		return g.getAkamaiBypass()
+	case "cloudfront", "aws-waf":
+		return g.getCloudfrontBypass()
+	case "imperva", "incapsula":
+		return g.getImpervaBypass()
+	case "wordfence":
+		return g.getWordfenceBypass()
+	case "modsecurity":
+		return g.getModSecurityBypass()
+	case "sucuri":
+		return g.getSucuriBypass()
+	case "f5":
+		return g.getF5Bypass()
+	default:
+		// Unknown or no WAF - use comprehensive bypass set
+		return g.getAllBypass()
+	}
 }
 
 // getAwesomeConfirmVariants returns confirm() based payloads from AwesomeXSS
@@ -566,11 +574,16 @@ func (g *Generator) getCSPBypassPayloads() []string {
 
 // deduplicate removes duplicate payloads while preserving order
 func (g *Generator) deduplicate(payloads []string) []string {
-	seen := make(map[string]bool)
-	var unique []string
+	if len(payloads) == 0 {
+		return payloads
+	}
+	seen := make(map[string]struct{}, len(payloads))
+	// Pre-allocate to avoid resizing
+	unique := make([]string, 0, len(payloads))
+
 	for _, p := range payloads {
-		if !seen[p] {
-			seen[p] = true
+		if _, exists := seen[p]; !exists {
+			seen[p] = struct{}{}
 			unique = append(unique, p)
 		}
 	}

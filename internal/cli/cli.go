@@ -251,6 +251,11 @@ Features:
 			// Check if header fuzzing mode is enabled
 			hasFuzzHeaders := len(fuzzHeaders) > 0 && containsFuzzMarker(fuzzHeaders)
 
+			// Ensure we have at least one target
+			if len(targetURLs) == 0 {
+				return fmt.Errorf("no target URLs provided")
+			}
+
 			// Create scanner config
 			cfg := &config.ScanConfig{
 				TargetURL:        targetURLs[0],
