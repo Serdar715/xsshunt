@@ -34,6 +34,7 @@ var (
 	outputFormat string
 	outputFile   string
 	verbose      bool
+	silent       bool
 
 	// Performance options
 	threads int
@@ -196,7 +197,9 @@ Features:
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Print banner
-			fmt.Println(banner.GetBanner())
+			if !silent {
+				fmt.Println(banner.GetBanner())
+			}
 
 			// Collect target URLs
 			var targetURLs []string
@@ -270,6 +273,7 @@ Features:
 				Threads:          threads,
 				Timeout:          timeout,
 				Verbose:          verbose,
+				Silent:           silent,
 				ProxyURL:         proxyURL,
 				ProxyEnabled:     proxyURL != "",
 				Cookies:          cookies,
@@ -290,16 +294,20 @@ Features:
 			}
 
 			// Print configuration summary
-			printConfigSummary(cfg, len(targetURLs))
+			if !silent {
+				printConfigSummary(cfg, len(targetURLs))
+			}
 
 			// Process each URL
 			var allResults []*config.ScanResult
 
 			for i, targetURL := range targetURLs {
-				if len(targetURLs) > 1 {
-					color.Cyan("\n[*] Scanning URL %d/%d: %s", i+1, len(targetURLs), truncateURL(targetURL, 60))
-				} else {
-					color.Cyan("\n[*] Starting XSS scan on: %s\n", targetURL)
+				if !silent {
+					if len(targetURLs) > 1 {
+						color.Cyan("\n[*] Scanning URL %d/%d: %s", i+1, len(targetURLs), truncateURL(targetURL, 60))
+					} else {
+						color.Cyan("\n[*] Starting XSS scan on: %s\n", targetURL)
+					}
 				}
 
 				// Update config with current URL
@@ -369,6 +377,7 @@ Features:
 	rootCmd.Flags().StringVar(&outputFormat, "format", "json", "Output format (json, html)")
 	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file for report")
 	rootCmd.Flags().BoolVar(&verbose, "verbose", false, "Enable verbose output")
+	rootCmd.Flags().BoolVar(&silent, "silent", false, "Silence all output except findings")
 
 	// Performance flags
 	rootCmd.Flags().IntVarP(&threads, "threads", "t", 5, "Number of concurrent threads")

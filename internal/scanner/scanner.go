@@ -162,11 +162,15 @@ func (s *Scanner) Scan() (*config.ScanResult, error) {
 	}
 
 	s.results.TotalPayloads = len(payloadList)
-	color.Cyan("[*] Loaded %d payloads", len(payloadList))
+	if !s.config.Silent {
+		color.Cyan("[*] Loaded %d payloads", len(payloadList))
+	}
 
 	// Check if header fuzzing mode is enabled
 	if s.config.FuzzMode && len(s.config.FuzzHeaders) > 0 {
-		color.Cyan("\n[*] Header Fuzzing Mode enabled")
+		if !s.config.Silent {
+			color.Cyan("\n[*] Header Fuzzing Mode enabled")
+		}
 		return s.scanHeaderFuzzing(payloadList)
 	}
 
@@ -176,7 +180,9 @@ func (s *Scanner) Scan() (*config.ScanResult, error) {
 
 	// Test each parameter
 	for paramName := range params {
-		color.Cyan("\n[*] Testing parameter: %s", paramName)
+		if !s.config.Silent {
+			color.Cyan("\n[*] Testing parameter: %s", paramName)
+		}
 
 		// Intelligent Analysis: Probe parameter for context and filtering
 		probeResult := s.analyzeParameter(baseURL, paramName, params)
@@ -220,7 +226,7 @@ func (s *Scanner) scanHeaderFuzzing(payloadList []string) (*config.ScanResult, e
 		if strings.Contains(header, "FUZZ") {
 			fuzzableHeaders = append(fuzzableHeaders, header)
 			parts := strings.SplitN(header, ":", 2)
-			if len(parts) == 2 {
+			if len(parts) == 2 && !s.config.Silent {
 				color.Cyan("[*] Will fuzz header: %s", strings.TrimSpace(parts[0]))
 			}
 		}
@@ -907,6 +913,33 @@ func (s *Scanner) evaluateDanger(context, payload, html string) *ReflectionResul
 
 // canExecuteInJSContext checks if payload can execute in JavaScript context
 func (s *Scanner) canExecuteInJSContext(payload, html string) bool {
+	lowerPayload := strings.ToLower(payload)
+	lowerHTML := strings.ToLower(html)
+
+	// Check if we can find the payload in the HTML
+	idx := strings.Index(lowerHTML, lowerPayload)
+
+	// If we're inside a quoted string, check if we break out
+	if idx > 0 {
+		prevChar := html[idx-1]
+		quote := ""
+		if prevChar == '"' {
+			quote = "\""
+		} else if prevChar == '\'' {
+			quote = "'"
+		} else if prevChar == '`' {
+			quote = "`"
+		}
+
+		if quote != "" {
+			// We are likely inside a string.
+			// Check if payload contains the quote to break out.
+			if !strings.Contains(payload, quote) {
+				return false // Cannot break out of the string
+			}
+		}
+	}
+
 	execPatterns := []string{
 		"alert(", "confirm(", "prompt(",
 		"eval(", "Function(", "setTimeout(",
@@ -914,7 +947,6 @@ func (s *Scanner) canExecuteInJSContext(payload, html string) bool {
 		".innerHTML", ".outerHTML", "location",
 	}
 
-	lowerPayload := strings.ToLower(payload)
 	for _, pattern := range execPatterns {
 		if strings.Contains(lowerPayload, strings.ToLower(pattern)) {
 			return true

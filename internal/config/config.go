@@ -26,6 +26,7 @@ type ScanConfig struct {
 	OutputFormat string
 	OutputFile   string
 	Verbose      bool
+	Silent       bool
 
 	// Performance configuration
 	Threads int
