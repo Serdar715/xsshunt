@@ -73,11 +73,14 @@ go install github.com/Serdar715/xsshunt/cmd/xsshunt@latest
 
 ### Build from Source
 
+**Linux / macOS:**
 ```bash
-git clone https://github.com/Serdar715/xsshunt.git
-cd xsshunt
-go mod tidy
-go build -o xsshunt ./cmd/xsshunt
+git clone https://github.com/Serdar715/xsshunt.git && cd xsshunt && go build -o xsshunt ./cmd/xsshunt && chmod +x xsshunt && sudo mv xsshunt /usr/local/bin/ && xsshunt -h
+```
+
+**Windows (PowerShell):**
+```powershell
+git clone https://github.com/Serdar715/xsshunt.git; cd xsshunt; go build -o xsshunt.exe ./cmd/xsshunt; .\xsshunt.exe -h
 ```
 
 ---
