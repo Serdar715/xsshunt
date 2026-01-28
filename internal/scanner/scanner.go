@@ -331,7 +331,7 @@ func (scanner *Scanner) testPayload(testURL, payload, param string) (*config.Vul
 
 	// 2. Prepare Payload & Marker
 	marker := fmt.Sprintf("XSSHUNT_%s", randomString(8))
-	finalURL, verifiablePayload := scanner.prepareContext(testURL, payload, marker)
+	finalURL, verifiablePayload := scanner.prepareContext(testURL, payload, param, marker)
 
 	// 3. Setup Browser
 	page, disconnect, err := scanner.setupBrowserPage(finalURL)
@@ -345,7 +345,7 @@ func (scanner *Scanner) testPayload(testURL, payload, param string) (*config.Vul
 	if err != nil {
 		// Log error if verbose but continue analysis
 		if scanner.config.Verbose {
-			color.Red("  [!] Verify Error: %v", err)
+			
 		}
 	}
 
@@ -370,17 +370,21 @@ func (s *Scanner) checkSmartMode(testURL, payload string) (bool, error) {
 }
 
 // prepareContext injects the marker using the strategy and builds the final URL
-func (scanner *Scanner) prepareContext(testURL, payload, marker string) (string, string) {
+func (scanner *Scanner) prepareContext(testURL, payload, paramName, marker string) (string, string) {
 	// Delegate Marker Injection to Strategy
 	verifiablePayload := scanner.strategy.InjectMarker(payload, marker)
 
+	if scanner.config.Verbose {
+		color.Yellow("    [DEBUG] Original Payload: %s", payload)
+		color.Yellow("    [DEBUG] Injected Payload: %s", verifiablePayload)
+	}
+
 	parsedURL, _ := url.Parse(testURL)
 	params := parsedURL.Query()
-	for key := range params {
-		if params.Get(key) == payload {
-			params.Set(key, verifiablePayload)
-		}
-	}
+	
+	// Directly set the target parameter
+	// This avoids encoding mismatch issues that happened with value matching
+	params.Set(paramName, verifiablePayload)
 
 	finalURL := fmt.Sprintf("%s://%s%s?%s", parsedURL.Scheme, parsedURL.Host, parsedURL.Path, params.Encode())
 	return finalURL, verifiablePayload
