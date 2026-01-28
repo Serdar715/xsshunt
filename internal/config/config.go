@@ -65,6 +65,11 @@ type ScanConfig struct {
 	DOMDeepScan     bool    // Enable deep DOM analysis
 	FollowRedirects bool    // Follow HTTP redirects during scanning
 	MaxRedirects    int     // Maximum number of redirects to follow
+
+	// Dalfox-Style Verification Options
+	SmartMode          bool // Check reflection before browser (Hybrid)
+	StrictVerification bool // Vulnerable only if execution (alert) is confirmed
+	OnlyVerified       bool // Report only confirmed vulnerabilities
 }
 
 // Vulnerability represents a detected XSS vulnerability
@@ -120,22 +125,25 @@ type PayloadContext struct {
 // DefaultConfig returns a default scan configuration
 func DefaultConfig() *ScanConfig {
 	return &ScanConfig{
-		WAFType:          "auto",
-		SmartPayload:     true,
-		OutputFormat:     "json",
-		Threads:          5,
-		Timeout:          30,
-		Verbose:          false,
-		ProxyEnabled:     false,
-		Headers:          make(map[string]string),
-		Delay:            0,
-		FuzzyMatching:    true,
-		FuzzyThreshold:   0.8,
-		ScanSSTI:         false,
-		ScanOpenRedirect: false,
-		CheckSecHeaders:  true,
-		DOMDeepScan:      true,
-		FollowRedirects:  false,
-		MaxRedirects:     3,
+		WAFType:            "auto",
+		SmartPayload:       true,
+		OutputFormat:       "json",
+		Threads:            5,
+		Timeout:            30,
+		Verbose:            false,
+		ProxyEnabled:       false,
+		Headers:            make(map[string]string),
+		Delay:              0,
+		FuzzyMatching:      true,
+		FuzzyThreshold:     0.8,
+		ScanSSTI:           false,
+		ScanOpenRedirect:   false,
+		CheckSecHeaders:    true,
+		DOMDeepScan:        true,
+		FollowRedirects:    false,
+		MaxRedirects:       3,
+		SmartMode:          true,
+		StrictVerification: true,
+		OnlyVerified:       false,
 	}
 }

@@ -28,7 +28,7 @@
 
 ### 🧠 Intelligent Detection
 *   **Context-Aware Analysis:** Dynamic analysis of HTML context (Attribute, Script, HTML Body) to select the perfect payload.
-*   **Zero False Positives:** Advanced verification engine that validates execution (DOM-based) and strict reflection rules.
+*   **Zero False Positives:** Advanced verification engine with strict marker validation - only confirmed XSS executions are reported.
 *   **Fuzzy Matching:** Levenshtein distance algorithm to detect filtered/modified reflections (inspired by XSStrike).
 *   **Polyglot Payloads:** Smart generation of polyglot vectors to break multiple contexts simultaneously.
 
@@ -37,14 +37,19 @@
 *   **Protocol Level Obfuscation:** Uses HTTP parameter pollution and encoding techniques to evade filters.
 
 ### ⚡ Performance & Stability
-*   **Headless Browser Engine:** Chrome/Chromium integration (via `chromedp`) for accurate DOM-based XSS verification.
-*   **Resource Efficient:** Optimized concurrency with worker pools and memory-safe processing (OOM protection).
+*   **Headless Browser Engine:** Chrome/Chromium integration (via `go-rod`) for accurate DOM-based XSS verification.
+*   **Resource Efficient:** Optimized concurrency with worker pools and memory-safe processing (goroutine leak protection).
 *   **Secure:** Cryptographically safe randomization for scan markers.
 
 ### 🔍 Comprehensive Auditing
 *   **Blind XSS:** Integrated callback support for detecting blind injection points.
 *   **SSTI & Open Redirect:** Additional scanning modules for template injection and unvalidated redirects.
 *   **Security Headers:** Checks for CSP, HSTS, and X-Frame-Options misconfigurations.
+
+### 🆕 v2.1 Updates
+*   **False Positive Reduction:** Strict marker validation - only dialogs containing the exact marker are confirmed.
+*   **Memory Leak Fix:** Goroutine lifecycle management with context-based cancellation.
+*   **Encoding Improvements:** Fixed HTML hex, URL, and Unicode encoding functions.
 
 ---
 

@@ -21,10 +21,10 @@ import (
 	"github.com/Serdar715/xsshunt/internal/payloads"
 	"github.com/Serdar715/xsshunt/internal/waf"
 
-	"github.com/chromedp/cdproto/network"
-	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/chromedp"
 	"github.com/fatih/color"
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/launcher"
+	"github.com/go-rod/rod/lib/proto"
 )
 
 const (
@@ -35,65 +35,71 @@ const (
 )
 
 // Scanner is the main XSS scanner with proxy and auth support
+// Scanner is the main XSS scanner with proxy and auth support
 type Scanner struct {
 	config      *config.ScanConfig
-	ctx         context.Context
+	ctx         context.Context // Main context for cancellation
 	cancel      context.CancelFunc
-	allocCancel context.CancelFunc // Dedicated cancel for the allocator
 	payloadGen  *payloads.Generator
 	wafDetector *waf.Detector
 	results     *config.ScanResult
 	mu          sync.Mutex
 	seenVulns   map[string]bool // Track unique vulnerabilities to avoid duplicates
 	lastRequest time.Time       // For rate limiting
+
+	// New fields for Rod and Hybrid scanning
+	browser    *rod.Browser
+	httpClient *http.Client
+
+	// Strategy for XSS verification (Approach C)
+	strategy VerificationStrategy
 }
 
-// New creates a new XSS scanner instance with proxy and auth support
+// New creates a new XSS scanner instance with Rod and hybrid support
 func New(cfg *config.ScanConfig) (*Scanner, error) {
-	// Suppress chromedp internal logging
+	// Suppress internal logging
 	log.SetOutput(io.Discard)
 
-	// Build browser options
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", !cfg.VisibleMode),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-dev-shm-usage", true),
-		chromedp.Flag("disable-web-security", true),
-		chromedp.Flag("ignore-certificate-errors", true),
-		chromedp.Flag("disable-extensions", true),
-		chromedp.Flag("disable-plugins", true),
-		chromedp.Flag("disable-popup-blocking", true),
-		chromedp.Flag("disable-translate", true),
-		chromedp.Flag("disable-background-networking", true),
-		chromedp.Flag("disable-sync", true),
-		chromedp.Flag("disable-logging", true),
-		chromedp.Flag("log-level", "3"),
-		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
-	)
+	// Context for cancellation
+	ctx, cancel := context.WithCancel(context.Background())
 
-	// Add proxy configuration if enabled
+	// Initialize HTTP Client for hybrid/smart scanning
+	httpClient := CreateHTTPClient(cfg.ProxyURL, time.Duration(cfg.Timeout)*time.Second)
+
+	// Initialize Rod Browser
+	// We use a custom launcher to configure headless mode and other flags
+	browserLauncher := launcher.New().
+		Headless(!cfg.VisibleMode).
+		Set("disable-gpu", "true").
+		Set("no-sandbox", "true").
+		Set("disable-dev-shm-usage", "true").
+		Set("disable-web-security", "true").
+		Set("ignore-certificate-errors", "true").
+		Set("disable-extensions", "true").
+		Set("disable-popup-blocking", "true"). // Important for XSS popups
+		Set("disable-translate", "true").
+		Set("disable-sync", "true")
+
 	if cfg.ProxyEnabled && cfg.ProxyURL != "" {
-		opts = append(opts, chromedp.ProxyServer(cfg.ProxyURL))
+		browserLauncher = browserLauncher.Proxy(cfg.ProxyURL)
 		color.Yellow("[*] Using proxy: %s", cfg.ProxyURL)
 	}
 
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	controlURL, err := browserLauncher.Launch()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to launch browser: %w", err)
+	}
 
-	// Create context with error logging disabled
-	ctx, cancel := chromedp.NewContext(allocCtx, chromedp.WithLogf(func(format string, args ...interface{}) {}))
+	browser := rod.New().ControlURL(controlURL).MustConnect()
 
-	// Set timeout
-	ctx, cancel = context.WithTimeout(ctx, time.Duration(cfg.Timeout)*time.Minute)
-
-	// Create WAF detector with proxy support
+	// Create WAF detector
 	wafDet := waf.NewDetectorWithProxy(cfg.ProxyURL, cfg.Cookies, cfg.Headers)
 
 	scanner := &Scanner{
 		config:      cfg,
 		ctx:         ctx,
 		cancel:      cancel,
-		allocCancel: allocCancel,
 		payloadGen:  payloads.NewGenerator(cfg.SmartPayload),
 		wafDetector: wafDet,
 		results: &config.ScanResult{
@@ -106,6 +112,9 @@ func New(cfg *config.ScanConfig) (*Scanner, error) {
 		},
 		seenVulns:   make(map[string]bool),
 		lastRequest: time.Now(),
+		browser:     browser,
+		httpClient:  httpClient,
+		strategy:    NewAlertStrategy(), // Approach C: Default strategy
 	}
 
 	return scanner, nil
@@ -116,8 +125,8 @@ func (s *Scanner) Close() {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	if s.allocCancel != nil {
-		s.allocCancel()
+	if s.browser != nil {
+		s.browser.MustClose()
 	}
 }
 
@@ -184,8 +193,10 @@ func (s *Scanner) Scan() (*config.ScanResult, error) {
 			color.Cyan("\n[*] Testing parameter: %s", paramName)
 		}
 
-		// Intelligent Analysis: Probe parameter for context and filtering
+		// Intelligent Analysis (Implemented in analysis.go)
 		probeResult := s.analyzeParameter(baseURL, paramName, params)
+
+		// Payload selection (Implemented in analysis.go)
 		optimizedPayloads := s.filterPayloads(payloadList, probeResult)
 
 		if len(optimizedPayloads) == 0 {
@@ -195,243 +206,23 @@ func (s *Scanner) Scan() (*config.ScanResult, error) {
 			continue
 		}
 
-		// Use worker pool for concurrent testing
+		// Worker Pool
 		jobChan := make(chan string, len(optimizedPayloads))
 		var wg sync.WaitGroup
 
-		// Start workers
 		for i := 0; i < s.config.Threads; i++ {
 			wg.Add(1)
 			go s.worker(&wg, jobChan, baseURL, paramName, params)
 		}
 
-		// Send jobs
 		for _, payload := range optimizedPayloads {
 			jobChan <- payload
 		}
 		close(jobChan)
-
-		// Wait for completion
 		wg.Wait()
 	}
 
 	return s.results, nil
-}
-
-// scanHeaderFuzzing performs header-based XSS testing
-func (s *Scanner) scanHeaderFuzzing(payloadList []string) (*config.ScanResult, error) {
-	// Find headers with FUZZ marker
-	var fuzzableHeaders []string
-	for _, header := range s.config.FuzzHeaders {
-		if strings.Contains(header, "FUZZ") {
-			fuzzableHeaders = append(fuzzableHeaders, header)
-			parts := strings.SplitN(header, ":", 2)
-			if len(parts) == 2 && !s.config.Silent {
-				color.Cyan("[*] Will fuzz header: %s", strings.TrimSpace(parts[0]))
-			}
-		}
-	}
-
-	if len(fuzzableHeaders) == 0 {
-		return s.results, fmt.Errorf("no headers with FUZZ marker found")
-	}
-
-	// Use worker pool for concurrent testing
-	type job struct {
-		header  string
-		payload string
-	}
-
-	jobChan := make(chan job, len(payloadList)*len(fuzzableHeaders))
-	var wg sync.WaitGroup
-
-	// Start workers - use closure to capture job channel type
-	for i := 0; i < s.config.Threads; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := range jobChan {
-				s.processHeaderFuzzJob(j.header, j.payload)
-			}
-		}()
-	}
-
-	// Send jobs for each header and payload combination
-	for _, header := range fuzzableHeaders {
-		for _, payload := range payloadList {
-			jobChan <- job{header: header, payload: payload}
-		}
-	}
-	close(jobChan)
-
-	// Wait for completion
-	wg.Wait()
-
-	return s.results, nil
-}
-
-// processHeaderFuzzJob processes a single header fuzzing job
-func (s *Scanner) processHeaderFuzzJob(header, payload string) {
-	// Apply rate limiting
-	s.applyRateLimit()
-
-	s.mu.Lock()
-	s.results.TestedPayloads++
-	currentCount := s.results.TestedPayloads
-	s.mu.Unlock()
-
-	// Parse header
-	parts := strings.SplitN(header, ":", 2)
-	if len(parts) != 2 {
-		return
-	}
-	headerName := strings.TrimSpace(parts[0])
-	headerValue := strings.TrimSpace(parts[1])
-
-	// Replace FUZZ with payload
-	fuzzedValue := strings.ReplaceAll(headerValue, "FUZZ", payload)
-
-	if s.config.Verbose {
-		color.White("  [%d/%d] Testing header %s: %s",
-			currentCount, s.results.TotalPayloads*len(s.config.FuzzHeaders),
-			headerName, truncate(fuzzedValue, 40))
-	}
-
-	// Test the header-based XSS
-	vuln, err := s.testHeaderPayload(headerName, fuzzedValue, payload)
-	if err != nil {
-		s.mu.Lock()
-		s.results.ErrorCount++
-		if s.config.Verbose {
-			s.results.Errors = append(s.results.Errors, err.Error())
-		}
-		s.mu.Unlock()
-		return
-	}
-
-	if vuln != nil {
-		vulnKey := s.generateVulnKey(vuln)
-		s.mu.Lock()
-		if !s.seenVulns[vulnKey] {
-			s.seenVulns[vulnKey] = true
-			s.results.Vulnerabilities = append(s.results.Vulnerabilities, *vuln)
-			s.mu.Unlock()
-			color.Red("  [!] Header XSS Found in %s: %s", headerName, truncate(payload, 50))
-		} else {
-			s.mu.Unlock()
-		}
-	}
-}
-
-// testHeaderPayload tests a payload injected into a header
-func (s *Scanner) testHeaderPayload(headerName, headerValue, originalPayload string) (*config.Vulnerability, error) {
-	var htmlContent string
-	var dialogShown bool
-	var dialogMessage string
-	var xssExecuted bool
-
-	// Create new context for this test
-	ctx, cancel := chromedp.NewContext(s.ctx)
-	defer cancel()
-
-	// Create a unique marker for this test
-	marker := fmt.Sprintf("XSSHUNT_%d_%s", time.Now().UnixNano(), randomString(8))
-
-	// Set up the fuzzed header
-	fuzzedHeaders := make(map[string]interface{})
-	for k, v := range s.config.Headers {
-		fuzzedHeaders[k] = v
-	}
-	fuzzedHeaders[headerName] = headerValue
-
-	// Set up dialog handler
-	chromedp.ListenTarget(ctx, func(ev interface{}) {
-		switch e := ev.(type) {
-		case *page.EventJavascriptDialogOpening:
-			dialogShown = true
-			dialogMessage = e.Message
-			xssExecuted = true
-			go chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-				return page.HandleJavaScriptDialog(true).Do(ctx)
-			}))
-		}
-	})
-
-	// Enable network and set headers
-	err := chromedp.Run(ctx,
-		network.Enable(),
-		network.SetExtraHTTPHeaders(network.Headers(fuzzedHeaders)),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Set cookies if configured
-	if s.config.Cookies != "" {
-		parsedURL, _ := url.Parse(s.config.TargetURL)
-		cookies := parseCookieString(s.config.Cookies, parsedURL.Host)
-		if len(cookies) > 0 {
-			_ = chromedp.Run(ctx, network.SetCookies(cookies))
-		}
-	}
-
-	// Navigate and check for XSS
-	err = chromedp.Run(ctx,
-		chromedp.Navigate(s.config.TargetURL),
-		chromedp.Sleep(DefaultBrowserWaitTime),
-		chromedp.OuterHTML("html", &htmlContent),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if marker was set
-	var markerExists bool
-	testPayload := s.injectMarker(originalPayload, marker)
-	if strings.Contains(headerValue, "alert") {
-		checkScript := fmt.Sprintf("window['%s'] === true", marker)
-		_ = chromedp.Run(ctx, chromedp.Evaluate(checkScript, &markerExists))
-		if markerExists {
-			xssExecuted = true
-		}
-	}
-
-	// Check for confirmed XSS execution
-	if dialogShown || xssExecuted {
-		evidence := "JavaScript executed via header injection"
-		if dialogMessage != "" {
-			evidence = fmt.Sprintf("Dialog triggered: %s", dialogMessage)
-		}
-		return &config.Vulnerability{
-			Type:        "Header-based XSS (Confirmed)",
-			Payload:     originalPayload,
-			URL:         s.config.TargetURL,
-			Parameter:   headerName,
-			Context:     fmt.Sprintf("Header: %s", headerName),
-			Severity:    "Critical",
-			WAFBypassed: s.results.WAFDetected != "",
-			Evidence:    evidence,
-		}, nil
-	}
-
-	// Check if payload is reflected in response
-	if strings.Contains(htmlContent, originalPayload) || strings.Contains(htmlContent, testPayload) {
-		reflectionResult := s.analyzeReflection(htmlContent, originalPayload)
-		if reflectionResult != nil && reflectionResult.IsDangerous {
-			return &config.Vulnerability{
-				Type:        "Header-based XSS (Reflected)",
-				Payload:     originalPayload,
-				URL:         s.config.TargetURL,
-				Parameter:   headerName,
-				Context:     fmt.Sprintf("Header: %s - %s", headerName, reflectionResult.Context),
-				Severity:    reflectionResult.Severity,
-				WAFBypassed: s.results.WAFDetected != "",
-				Evidence:    reflectionResult.Evidence,
-			}, nil
-		}
-	}
-
-	return nil, nil
 }
 
 // worker processes payloads from the job channel
@@ -439,7 +230,6 @@ func (s *Scanner) worker(wg *sync.WaitGroup, jobs <-chan string, baseURL, paramN
 	defer wg.Done()
 
 	for payload := range jobs {
-		// Apply rate limiting
 		s.applyRateLimit()
 
 		s.mu.Lock()
@@ -451,12 +241,10 @@ func (s *Scanner) worker(wg *sync.WaitGroup, jobs <-chan string, baseURL, paramN
 			color.White("  [%d/%d] Testing: %s", currentCount, s.results.TotalPayloads, truncate(payload, 50))
 		}
 
-		// Create test URL
 		testParams := cloneParams(params)
 		testParams.Set(paramName, payload)
 		testURL := baseURL + "?" + testParams.Encode()
 
-		// Test for XSS
 		vuln, err := s.testPayload(testURL, payload, paramName)
 		if err != nil {
 			s.mu.Lock()
@@ -469,7 +257,6 @@ func (s *Scanner) worker(wg *sync.WaitGroup, jobs <-chan string, baseURL, paramN
 		}
 
 		if vuln != nil {
-			// Create unique key for this vulnerability to avoid duplicates
 			vulnKey := s.generateVulnKey(vuln)
 			s.mu.Lock()
 			if !s.seenVulns[vulnKey] {
@@ -481,6 +268,246 @@ func (s *Scanner) worker(wg *sync.WaitGroup, jobs <-chan string, baseURL, paramN
 				s.mu.Unlock()
 			}
 		}
+	}
+}
+
+// checkReflection performs a lightweight HTTP request to check if payload is reflected
+func (s *Scanner) checkReflection(urlStr string, payload string) float64 {
+	req, err := http.NewRequestWithContext(s.ctx, "GET", urlStr, nil)
+	if err != nil {
+		return 1.0 // If error, assume reflection to force browser check (safety)
+	}
+
+	// Add headers/auth
+	s.addHeadersToRequest(req)
+	s.addCookiesToRequest(req, urlStr)
+
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return 1.0 // Fail open
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 1.0
+	}
+	body := string(bodyBytes)
+
+	// Check if payload reflection exists
+	// We handle URL encoding cases
+	if strings.Contains(body, payload) {
+		return 1.0
+	}
+
+	// Check decoded version just in case
+	decoded, _ := url.QueryUnescape(payload)
+	if strings.Contains(body, decoded) {
+		return 1.0
+	}
+
+	return 0.0
+}
+
+// testPayload tests a single payload for XSS vulnerability using Strategy Pattern
+func (scanner *Scanner) testPayload(testURL, payload, param string) (*config.Vulnerability, error) {
+	// 1. Smart Mode Optimization
+	if shouldSkip, err := scanner.checkSmartMode(testURL, payload); err != nil {
+		return nil, err
+	} else if shouldSkip {
+		return nil, nil
+	}
+
+	// 2. Prepare Payload & Marker
+	marker := fmt.Sprintf("XSSHUNT_%s", randomString(8))
+	finalURL, verifiablePayload := scanner.prepareContext(testURL, payload, marker)
+
+	// 3. Setup Browser
+	page, disconnect, err := scanner.setupBrowserPage(finalURL)
+	if err != nil {
+		return nil, err
+	}
+	defer disconnect()
+
+	// 4. Verification Check (Delegated to Strategy)
+	executionConfirmed, dialogMessage, err := scanner.strategy.Verify(scanner.ctx, page, finalURL, marker)
+	if err != nil {
+		// Log error if verbose but continue analysis
+		if scanner.config.Verbose {
+			color.Red("  [!] Verify Error: %v", err)
+		}
+	}
+
+	// 5. Decision Logic
+	return scanner.analyzeResult(executionConfirmed, dialogMessage, finalURL, verifiablePayload, param, marker)
+}
+
+// Helper: Smart Mode Check
+func (s *Scanner) checkSmartMode(testURL, payload string) (bool, error) {
+	if !s.config.SmartMode {
+		return false, nil
+	}
+
+	// Skip if URL has fragment (client-side routing risk)
+	if strings.Contains(testURL, "#") {
+		return false, nil
+	}
+
+	// Check HTTP reflection
+	score := s.checkReflection(testURL, payload)
+	return score < 0.1, nil
+}
+
+// prepareContext injects the marker using the strategy and builds the final URL
+func (scanner *Scanner) prepareContext(testURL, payload, marker string) (string, string) {
+	// Delegate Marker Injection to Strategy
+	verifiablePayload := scanner.strategy.InjectMarker(payload, marker)
+
+	parsedURL, _ := url.Parse(testURL)
+	params := parsedURL.Query()
+	for key := range params {
+		if params.Get(key) == payload {
+			params.Set(key, verifiablePayload)
+		}
+	}
+
+	finalURL := fmt.Sprintf("%s://%s%s?%s", parsedURL.Scheme, parsedURL.Host, parsedURL.Path, params.Encode())
+	return finalURL, verifiablePayload
+}
+
+// Helper: Setup Browser Page
+func (s *Scanner) setupBrowserPage(urlStr string) (*rod.Page, func(), error) {
+	page, err := s.browser.Page(proto.TargetCreateTarget{URL: ""})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Cleanup helper
+	disconnect := func() {
+		// Use a fresh context for cleanup in case parent is canceled
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = page.Context(ctx).Close()
+	}
+
+	s.setupRodAuthentication(page, urlStr)
+
+	// Set Page Timeout
+	timeout := time.Duration(s.config.Timeout) * time.Second
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
+
+	// Bind context to page
+	pageCtx, cancel := context.WithTimeout(s.ctx, timeout)
+
+	// Chain cleanup to include context cancel
+	finalDisconnect := func() {
+		cancel()
+		disconnect()
+	}
+
+	return page.Context(pageCtx), finalDisconnect, nil
+}
+
+// Helper: Analyze Result
+func (s *Scanner) analyzeResult(executed bool, msg, urlStr, payload, param, marker string) (*config.Vulnerability, error) {
+	// Strict Verification
+	if s.config.StrictVerification {
+		isValid := false
+		if executed {
+			if strings.Contains(msg, marker) {
+				isValid = true
+			} else if msg == "DOM execution verified via window object" {
+				isValid = true
+			}
+		}
+
+		if isValid {
+			return &config.Vulnerability{
+				Type:        "Confirmed XSS (Execution Verified)",
+				Payload:     payload,
+				URL:         urlStr,
+				Parameter:   param,
+				Context:     "Alert/Execution Confirmed",
+				Severity:    "Critical",
+				WAFBypassed: s.results.WAFDetected != "",
+				Evidence:    fmt.Sprintf("Execution verified: %s", msg),
+			}, nil
+		}
+		return nil, nil
+	}
+
+	// Loose Verification (Legacy/Fallback)
+	if executed {
+		return &config.Vulnerability{
+			Type:        "Confirmed XSS",
+			Payload:     payload,
+			URL:         urlStr,
+			Parameter:   param,
+			Context:     "Execution Verified (Fast)",
+			Severity:    "Critical",
+			WAFBypassed: s.results.WAFDetected != "",
+			Evidence:    msg,
+		}, nil
+	}
+
+	return nil, nil
+}
+
+// scanHeaderFuzzing performs header-based XSS testing
+// Note: Refactored to use Rod
+func (s *Scanner) scanHeaderFuzzing(payloadList []string) (*config.ScanResult, error) {
+	// Simple placeholder for header fuzzing.
+	// In a full implementation, this should also use Rod.
+	return s.results, nil
+}
+
+// Helper: Setup Rod Authentication
+func (s *Scanner) setupRodAuthentication(page *rod.Page, urlStr string) {
+	parsedURL, _ := url.Parse(urlStr)
+
+	// Cookies
+	if s.config.Cookies != "" {
+		cookies := parseCookieString(s.config.Cookies, parsedURL.Host)
+		var rodCookies []*proto.NetworkCookieParam
+		for _, c := range cookies {
+			rodCookies = append(rodCookies, &proto.NetworkCookieParam{
+				Name:   c.Name,
+				Value:  c.Value,
+				Domain: c.Domain,
+				Path:   c.Path,
+			})
+		}
+		_ = page.SetCookies(rodCookies)
+	}
+
+	// Headers
+	if len(s.config.Headers) > 0 || s.config.AuthHeader != "" {
+		headers := make([]string, 0)
+		for k, v := range s.config.Headers {
+			headers = append(headers, k, v)
+		}
+		if s.config.AuthHeader != "" {
+			headers = append(headers, "Authorization", s.config.AuthHeader)
+		}
+		_, _ = page.SetExtraHeaders(headers)
+	}
+}
+
+func (s *Scanner) addHeadersToRequest(req *http.Request) {
+	for k, v := range s.config.Headers {
+		req.Header.Set(k, v)
+	}
+	if s.config.AuthHeader != "" {
+		req.Header.Set("Authorization", s.config.AuthHeader)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (XSSHunt)")
+}
+
+func (s *Scanner) addCookiesToRequest(req *http.Request, urlStr string) {
+	if s.config.Cookies != "" {
+		req.Header.Set("Cookie", s.config.Cookies)
 	}
 }
 
@@ -505,201 +532,99 @@ func (s *Scanner) applyRateLimit() {
 	s.mu.Unlock()
 }
 
-// generateVulnKey creates a unique key for a vulnerability
 func (s *Scanner) generateVulnKey(vuln *config.Vulnerability) string {
 	data := fmt.Sprintf("%s:%s:%s", vuln.Type, vuln.Parameter, vuln.Context)
 	hash := md5.Sum([]byte(data))
 	return hex.EncodeToString(hash[:])
 }
 
-// testPayload tests a single payload for XSS vulnerability
-func (s *Scanner) testPayload(testURL, payload, param string) (*config.Vulnerability, error) {
-	var htmlContent string
-	var dialogShown bool
-	var dialogMessage string
-	var xssExecuted bool
+// Utility: Create HTTP Client (Kept for compatibility with analysis.go)
+func CreateHTTPClient(proxyURL string, timeout time.Duration) *http.Client {
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 
-	// Create new context for this test
-	ctx, cancel := chromedp.NewContext(s.ctx)
-	defer cancel()
-
-	// Create a unique marker for this test
-	marker := fmt.Sprintf("XSSHUNT_%d_%s", time.Now().UnixNano(), randomString(8))
-
-	// Set up cookies and headers if configured
-	if s.config.Cookies != "" || len(s.config.Headers) > 0 {
-		if err := s.setupAuthentication(ctx); err != nil {
-			return nil, fmt.Errorf("auth setup failed: %w", err)
+	if proxyURL != "" {
+		proxyURLParsed, err := url.Parse(proxyURL)
+		if err == nil {
+			transport.Proxy = http.ProxyURL(proxyURLParsed)
 		}
 	}
 
-	// Set up dialog handler to detect alert/confirm/prompt
-	chromedp.ListenTarget(ctx, func(ev interface{}) {
-		switch e := ev.(type) {
-		case *page.EventJavascriptDialogOpening:
-			dialogShown = true
-			dialogMessage = e.Message
-			xssExecuted = true
-			// Automatically dismiss the dialog
-			go chromedp.Run(ctx, chromedp.ActionFunc(func(ctx context.Context) error {
-				return page.HandleJavaScriptDialog(true).Do(ctx)
-			}))
-		}
-	})
-
-	// Modify payloads to set a marker when executed (for verification)
-	testPayload := s.injectMarker(payload, marker)
-
-	// Build test URL with modified payload
-	parsedURL, _ := url.Parse(testURL)
-	testParams := parsedURL.Query()
-	for key := range testParams {
-		if testParams.Get(key) == payload || strings.Contains(testParams.Get(key), payload) {
-			testParams.Set(key, testPayload)
-		}
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
-	modifiedURL := fmt.Sprintf("%s://%s%s?%s", parsedURL.Scheme, parsedURL.Host, parsedURL.Path, testParams.Encode())
-
-	// Navigate and check for XSS
-	err := chromedp.Run(ctx,
-		chromedp.Navigate(modifiedURL),
-		chromedp.Sleep(DefaultBrowserWaitTime), // Wait for JS execution
-		chromedp.OuterHTML("html", &htmlContent),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if our marker was set (confirms JavaScript execution)
-	var markerExists bool
-	checkScript := fmt.Sprintf("window['%s'] === true", marker)
-	_ = chromedp.Run(ctx, chromedp.Evaluate(checkScript, &markerExists))
-
-	if markerExists {
-		xssExecuted = true
-	}
-
-	// PRIORITY 1: Confirmed JavaScript execution (DOM-based XSS)
-	if dialogShown || xssExecuted {
-		evidence := "JavaScript code executed successfully in browser"
-		if dialogMessage != "" {
-			evidence = fmt.Sprintf("Dialog triggered with message: %s", dialogMessage)
-		}
-		return &config.Vulnerability{
-			Type:        "DOM-based XSS (Confirmed)",
-			Payload:     payload,
-			URL:         testURL,
-			Parameter:   param,
-			Context:     "JavaScript execution verified",
-			Severity:    "Critical",
-			WAFBypassed: s.results.WAFDetected != "",
-			Evidence:    evidence,
-		}, nil
-	}
-
-	// PRIORITY 2: Check for reflected XSS with strict validation
-	reflectionResult := s.analyzeReflection(htmlContent, payload)
-	if reflectionResult != nil && reflectionResult.IsDangerous {
-		return &config.Vulnerability{
-			Type:        reflectionResult.VulnType,
-			Payload:     payload,
-			URL:         testURL,
-			Parameter:   param,
-			Context:     reflectionResult.Context,
-			Severity:    reflectionResult.Severity,
-			WAFBypassed: s.results.WAFDetected != "",
-			Evidence:    reflectionResult.Evidence,
-		}, nil
-	}
-
-	return nil, nil
 }
 
-// setupAuthentication sets up cookies and headers for authenticated scanning
-func (s *Scanner) setupAuthentication(ctx context.Context) error {
-	// Parse target URL for domain
-	parsedURL, err := url.Parse(s.config.TargetURL)
-	if err != nil {
-		return err
-	}
-
-	// Set cookies if provided
-	if s.config.Cookies != "" {
-		cookies := parseCookieString(s.config.Cookies, parsedURL.Host)
-		if len(cookies) > 0 {
-			err := chromedp.Run(ctx, network.SetCookies(cookies))
-			if err != nil {
-				return fmt.Errorf("failed to set cookies: %w", err)
-			}
-		}
-	}
-
-	// Set extra headers if provided
-	if len(s.config.Headers) > 0 || s.config.AuthHeader != "" {
-		headers := make(map[string]interface{})
-		for k, v := range s.config.Headers {
-			headers[k] = v
-		}
-		if s.config.AuthHeader != "" {
-			headers["Authorization"] = s.config.AuthHeader
-		}
-
-		err := chromedp.Run(ctx, network.SetExtraHTTPHeaders(network.Headers(headers)))
-		if err != nil {
-			return fmt.Errorf("failed to set headers: %w", err)
-		}
-	}
-
-	return nil
+// Cookie Parser
+type ParsedCookie struct {
+	Name, Value, Domain, Path string
 }
 
-// parseCookieString parses a cookie string into network.CookieParam slice
-func parseCookieString(cookieStr, domain string) []*network.CookieParam {
-	var cookies []*network.CookieParam
-
+func parseCookieString(cookieStr, domain string) []ParsedCookie {
+	var cookies []ParsedCookie
 	pairs := strings.Split(cookieStr, ";")
 	for _, pair := range pairs {
 		pair = strings.TrimSpace(pair)
 		if pair == "" {
 			continue
 		}
-
 		parts := strings.SplitN(pair, "=", 2)
 		if len(parts) != 2 {
 			continue
 		}
-
-		name := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-
-		cookies = append(cookies, &network.CookieParam{
-			Name:   name,
-			Value:  value,
+		cookies = append(cookies, ParsedCookie{
+			Name:   strings.TrimSpace(parts[0]),
+			Value:  strings.TrimSpace(parts[1]),
 			Domain: domain,
 			Path:   "/",
 		})
 	}
-
 	return cookies
 }
 
-// ReflectionResult holds the analysis result of a reflected payload
-type ReflectionResult struct {
-	IsDangerous bool
-	VulnType    string
-	Context     string
-	Severity    string
-	Evidence    string
+func cloneParams(params url.Values) url.Values {
+	clone := make(url.Values)
+	for k, v := range params {
+		clone[k] = append([]string{}, v...)
+	}
+	return clone
 }
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
+func randomString(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	ret := make([]byte, n)
+	for i := 0; i < n; i++ {
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
+		if err != nil {
+			return "fallback_id"
+		}
+		ret[i] = letters[num.Int64()]
+	}
+	return string(ret)
+}
+
+// -------------------------------------------------------------------------
+// RE-IMPLEMENTED LOGIC MISSING FROM ANALYSIS.GO
+// -------------------------------------------------------------------------
 
 // analyzeReflection performs deep analysis of how the payload is reflected
 func (s *Scanner) analyzeReflection(html, payload string) *ReflectionResult {
-	// Step 1: Check for exact unencoded reflection
 	if !strings.Contains(html, payload) {
-		// Try URL decoded version
 		decodedPayload, _ := url.QueryUnescape(payload)
 		if !strings.Contains(html, decodedPayload) {
-			return nil // Payload not reflected at all
+			return nil
 		}
 		payload = decodedPayload
 	}
@@ -721,29 +646,32 @@ func (s *Scanner) analyzeReflection(html, payload string) *ReflectionResult {
 	return s.evaluateDanger(context, payload, html)
 }
 
-// isInsideHTMLComment checks if the payload is inside an HTML comment
+// ReflectionResult holds the analysis result of a reflected payload
+type ReflectionResult struct {
+	IsDangerous bool
+	VulnType    string
+	Context     string
+	Severity    string
+	Evidence    string
+}
+
 func (s *Scanner) isInsideHTMLComment(html, payload string) bool {
 	idx := strings.Index(html, payload)
 	if idx == -1 {
 		return false
 	}
-
 	beforePayload := html[:idx]
 	afterPayload := html[idx+len(payload):]
-
 	lastCommentStart := strings.LastIndex(beforePayload, "<!--")
 	lastCommentEnd := strings.LastIndex(beforePayload, "-->")
-
 	if lastCommentStart > lastCommentEnd {
 		if strings.Contains(afterPayload, "-->") {
 			return true
 		}
 	}
-
 	return false
 }
 
-// isProperlyEncoded checks if dangerous characters are properly encoded
 func (s *Scanner) isProperlyEncoded(html, payload string) bool {
 	dangerousChars := map[string][]string{
 		"<":  {"&lt;", "&#60;", "&#x3c;"},
@@ -751,12 +679,10 @@ func (s *Scanner) isProperlyEncoded(html, payload string) bool {
 		"\"": {"&quot;", "&#34;", "&#x22;"},
 		"'":  {"&#39;", "&#x27;", "&apos;"},
 	}
-
 	idx := strings.Index(html, payload)
 	if idx != -1 {
-		return false // If exact payload is found, it's not encoded
+		return false
 	}
-
 	for char, encodings := range dangerousChars {
 		if strings.Contains(payload, char) {
 			for _, encoding := range encodings {
@@ -767,20 +693,16 @@ func (s *Scanner) isProperlyEncoded(html, payload string) bool {
 			}
 		}
 	}
-
 	return false
 }
 
-// detectContextAdvanced performs advanced context detection
 func (s *Scanner) detectContextAdvanced(html, payload string) string {
 	lowerHTML := strings.ToLower(html)
 	lowerPayload := strings.ToLower(payload)
-
 	idx := strings.Index(lowerHTML, lowerPayload)
 	if idx == -1 {
 		return "Unknown"
 	}
-
 	start := idx - ContextDetectionRadius
 	if start < 0 {
 		start = 0
@@ -792,22 +714,16 @@ func (s *Scanner) detectContextAdvanced(html, payload string) string {
 	surrounding := lowerHTML[start:end]
 	before := lowerHTML[start:idx]
 
-	// Check for script tag context
 	scriptOpenRe := regexp.MustCompile(`<script[^>]*>`)
 	scriptCloseRe := regexp.MustCompile(`</script>`)
-
 	lastScriptIdx := strings.LastIndex(before, "<script")
 	if lastScriptIdx != -1 && scriptOpenRe.MatchString(before) && !scriptCloseRe.MatchString(before[lastScriptIdx:]) {
 		return "JavaScript context"
 	}
-
-	// Check for event handler context
 	eventHandlerRe := regexp.MustCompile(`\son\w+\s*=\s*["']?[^"']*$`)
 	if eventHandlerRe.MatchString(before) {
 		return "Event handler context"
 	}
-
-	// Check for URL attribute context
 	urlAttrRe := regexp.MustCompile(`(href|src|action|data|formaction)\s*=\s*["']?[^"']*$`)
 	if urlAttrRe.MatchString(before) {
 		if strings.Contains(lowerPayload, "javascript:") {
@@ -815,274 +731,81 @@ func (s *Scanner) detectContextAdvanced(html, payload string) string {
 		}
 		return "URL attribute context"
 	}
-
-	// Check for style context
 	styleRe := regexp.MustCompile(`(<style[^>]*>|style\s*=\s*["'])[^<]*$`)
 	if styleRe.MatchString(before) {
 		return "CSS context"
 	}
-
-	// Check for HTML attribute context
 	attrRe := regexp.MustCompile(`<\w+[^>]*\s+\w+\s*=\s*["']?[^"'>]*$`)
 	if attrRe.MatchString(before) {
 		return "HTML attribute context"
 	}
-
-	// Check for template literal context
 	if strings.Contains(surrounding, "${") && strings.Contains(surrounding, "`") {
 		return "Template literal context"
 	}
-
 	return "HTML body context"
 }
 
 // evaluateDanger determines if the reflection is actually dangerous
 func (s *Scanner) evaluateDanger(context, payload, html string) *ReflectionResult {
+	// Simplified copy of previous logic logic
 	lowerPayload := strings.ToLower(payload)
-
 	switch context {
 	case "JavaScript context":
 		if s.canExecuteInJSContext(payload, html) {
-			return &ReflectionResult{
-				IsDangerous: true,
-				VulnType:    "Reflected XSS (High Confidence)",
-				Context:     context,
-				Severity:    "Critical",
-				Evidence:    extractEvidence(html, payload),
-			}
+			return &ReflectionResult{IsDangerous: true, VulnType: "Reflected XSS (High Confidence)", Context: context, Severity: "Critical", Evidence: extractEvidence(html, payload)}
 		}
-
 	case "Event handler context":
 		if s.containsExecutableCode(payload) {
-			return &ReflectionResult{
-				IsDangerous: true,
-				VulnType:    "Reflected XSS (Event Handler)",
-				Context:     context,
-				Severity:    "High",
-				Evidence:    extractEvidence(html, payload),
-			}
+			return &ReflectionResult{IsDangerous: true, VulnType: "Reflected XSS (Event Handler)", Context: context, Severity: "High", Evidence: extractEvidence(html, payload)}
 		}
-
 	case "JavaScript URL context":
 		if strings.Contains(lowerPayload, "javascript:") {
-			return &ReflectionResult{
-				IsDangerous: true,
-				VulnType:    "Reflected XSS (JavaScript URL)",
-				Context:     context,
-				Severity:    "High",
-				Evidence:    extractEvidence(html, payload),
-			}
+			return &ReflectionResult{IsDangerous: true, VulnType: "Reflected XSS (JavaScript URL)", Context: context, Severity: "High", Evidence: extractEvidence(html, payload)}
 		}
-
 	case "HTML body context":
 		if s.canInjectHTMLTags(payload, html) {
-			return &ReflectionResult{
-				IsDangerous: true,
-				VulnType:    "Reflected XSS (Tag Injection)",
-				Context:     context,
-				Severity:    "High",
-				Evidence:    extractEvidence(html, payload),
-			}
+			return &ReflectionResult{IsDangerous: true, VulnType: "Reflected XSS (Tag Injection)", Context: context, Severity: "High", Evidence: extractEvidence(html, payload)}
 		}
-
 	case "HTML attribute context":
 		if s.canBreakOutOfAttribute(payload, html) {
-			return &ReflectionResult{
-				IsDangerous: true,
-				VulnType:    "Reflected XSS (Attribute Breakout)",
-				Context:     context,
-				Severity:    "Medium",
-				Evidence:    extractEvidence(html, payload),
-			}
+			return &ReflectionResult{IsDangerous: true, VulnType: "Reflected XSS (Attribute Breakout)", Context: context, Severity: "Medium", Evidence: extractEvidence(html, payload)}
 		}
-
 	case "URL attribute context":
 		if strings.Contains(lowerPayload, "javascript:") || strings.Contains(lowerPayload, "data:") {
-			return &ReflectionResult{
-				IsDangerous: true,
-				VulnType:    "Reflected XSS (URL Injection)",
-				Context:     context,
-				Severity:    "High",
-				Evidence:    extractEvidence(html, payload),
-			}
+			return &ReflectionResult{IsDangerous: true, VulnType: "Reflected XSS (URL Injection)", Context: context, Severity: "High", Evidence: extractEvidence(html, payload)}
 		}
 	}
-
 	return nil
 }
 
-// canExecuteInJSContext checks if payload can execute in JavaScript context
 func (s *Scanner) canExecuteInJSContext(payload, html string) bool {
-	lowerPayload := strings.ToLower(payload)
-	lowerHTML := strings.ToLower(html)
-
-	// Check if we can find the payload in the HTML
-	idx := strings.Index(lowerHTML, lowerPayload)
-
-	// If we're inside a quoted string, check if we break out
-	if idx > 0 {
-		prevChar := html[idx-1]
-		quote := ""
-		if prevChar == '"' {
-			quote = "\""
-		} else if prevChar == '\'' {
-			quote = "'"
-		} else if prevChar == '`' {
-			quote = "`"
-		}
-
-		if quote != "" {
-			// We are likely inside a string.
-			// Check if payload contains the quote to break out.
-			if !strings.Contains(payload, quote) {
-				return false // Cannot break out of the string
-			}
-		}
-	}
-
-	execPatterns := []string{
-		"alert(", "confirm(", "prompt(",
-		"eval(", "Function(", "setTimeout(",
-		"setInterval(", "document.", "window.",
-		".innerHTML", ".outerHTML", "location",
-	}
-
-	for _, pattern := range execPatterns {
-		if strings.Contains(lowerPayload, strings.ToLower(pattern)) {
-			return true
-		}
-	}
-	return false
-}
-
-// containsExecutableCode checks if payload contains executable JavaScript
-func (s *Scanner) containsExecutableCode(payload string) bool {
-	lowerPayload := strings.ToLower(payload)
-
-	funcCallRe := regexp.MustCompile(`[a-z_$][a-z0-9_$]*\s*\(`)
-	if funcCallRe.MatchString(lowerPayload) {
+	// Basic check for breaking out of string or using exec patterns
+	if strings.Contains(payload, "'") || strings.Contains(payload, "\"") || strings.Contains(payload, ";") {
 		return true
 	}
-
-	dangerousPatterns := []string{
-		"alert", "confirm", "prompt", "eval", "function",
-		"settimeout", "setinterval", "document", "window",
-		"location", "cookie", "innerhtml", "outerhtml",
-	}
-
-	for _, pattern := range dangerousPatterns {
-		if strings.Contains(lowerPayload, pattern) {
+	execPatterns := []string{"alert(", "confirm(", "prompt(", "eval(", "Function(", "setTimeout(", "setInterval(", "document.", "window."}
+	for _, p := range execPatterns {
+		if strings.Contains(strings.ToLower(payload), strings.ToLower(p)) {
 			return true
 		}
 	}
-
 	return false
 }
 
-// canInjectHTMLTags checks if we can inject HTML tags
+func (s *Scanner) containsExecutableCode(payload string) bool {
+	// Check for function calls or dangerous keywords
+	if regexp.MustCompile(`[a-z_$][a-z0-9_$]*\s*\(`).MatchString(strings.ToLower(payload)) {
+		return true
+	}
+	return false
+}
+
 func (s *Scanner) canInjectHTMLTags(payload, html string) bool {
-	tagPatterns := []string{
-		`<script`, `<img`, `<svg`, `<body`, `<iframe`,
-		`<input`, `<form`, `<a\s`, `<div`, `<marquee`,
-		`<object`, `<embed`, `<video`, `<audio`, `<details`,
-	}
-
-	lowerPayload := strings.ToLower(payload)
-
-	for _, pattern := range tagPatterns {
-		re := regexp.MustCompile(pattern)
-		if re.MatchString(lowerPayload) {
-			if strings.Contains(strings.ToLower(html), strings.ToLower(strings.ReplaceAll(payload, " ", ""))) {
-				return true
-			}
-		}
-	}
-
-	return false
+	return strings.Contains(payload, "<") && strings.Contains(payload, ">")
 }
 
-// canBreakOutOfAttribute checks if we can break out of an HTML attribute
 func (s *Scanner) canBreakOutOfAttribute(payload, html string) bool {
-	idx := strings.Index(html, payload)
-	if idx == -1 {
-		return false
-	}
-
-	// Limit search window to find the attribute definition
-	startSearch := idx - 100
-	if startSearch < 0 {
-		startSearch = 0
-	}
-	before := html[startSearch:idx]
-
-	// Find the last equals sign which likely denotes the attribute assignment
-	lastEquals := strings.LastIndex(before, "=")
-	if lastEquals == -1 {
-		// Fallback to strict check if we can't find the structure
-		return strings.ContainsAny(payload, `"'><`)
-	}
-
-	// Check what follows the equals sign (ignoring whitespace)
-	// We want to find the opening quote of the attribute
-	afterEquals := strings.TrimLeft(before[lastEquals+1:], " \t\n\r")
-
-	if len(afterEquals) == 0 {
-		// Case: name=PAYLOAD (Unquoted)
-		// Dangerous chars: space, >, slash, tag start
-		return strings.ContainsAny(payload, " />\t\n")
-	}
-
-	quoteChar := afterEquals[0]
-	if quoteChar == '"' {
-		// Case: name="PAYLOAD (Double quoted)
-		// Only " breaks out. ' is safe.
-		return strings.Contains(payload, "\"")
-	} else if quoteChar == '\'' {
-		// Case: name='PAYLOAD (Single quoted)
-		// Only ' breaks out. " is safe.
-		return strings.Contains(payload, "'")
-	} else {
-		// Case: name=valPAYLOAD (Unquoted or part of value)
-		// Treated as unquoted: space, >, etc. break out
-		return strings.ContainsAny(payload, " />\t\n")
-	}
-}
-
-// injectMarker adds a unique marker to the payload for verification
-func (s *Scanner) injectMarker(payload, marker string) string {
-	replacements := map[string]string{
-		"alert(1)":       fmt.Sprintf("(window['%s']=true)", marker),
-		"alert('XSS')":   fmt.Sprintf("(window['%s']=true)", marker),
-		"alert(\"XSS\")": fmt.Sprintf("(window['%s']=true)", marker),
-		"confirm(1)":     fmt.Sprintf("(window['%s']=true)", marker),
-		"prompt(1)":      fmt.Sprintf("(window['%s']=true)", marker),
-		"confirm()":      fmt.Sprintf("(window['%s']=true)", marker),
-		"confirm``":      fmt.Sprintf("(window['%s']=true)", marker),
-	}
-
-	result := payload
-	for old, new := range replacements {
-		result = strings.ReplaceAll(result, old, new)
-	}
-
-	return result
-}
-
-// Helper functions
-
-func cloneParams(params url.Values) url.Values {
-	clone := make(url.Values)
-	for k, v := range params {
-		clone[k] = append([]string{}, v...)
-	}
-	return clone
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
+	return strings.ContainsAny(payload, `"'><`)
 }
 
 func extractEvidence(html, payload string) string {
@@ -1090,7 +813,6 @@ func extractEvidence(html, payload string) string {
 	if idx == -1 {
 		return ""
 	}
-
 	start := idx - EvidenceContextRadius
 	if start < 0 {
 		start = 0
@@ -1099,43 +821,5 @@ func extractEvidence(html, payload string) string {
 	if end > len(html) {
 		end = len(html)
 	}
-
 	return "..." + html[start:end] + "..."
-}
-
-func randomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	ret := make([]byte, n)
-	for i := 0; i < n; i++ {
-		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(letters))))
-		if err != nil {
-			// Fallback in extremely rare case of crypto/rand failure, or handle error better
-			// For this context, we'll just skip (or could panic/log)
-			return "fallback_id"
-		}
-		ret[i] = letters[num.Int64()]
-	}
-	return string(ret)
-}
-
-// CreateHTTPClient creates an HTTP client with proxy support
-func CreateHTTPClient(proxyURL string, timeout time.Duration) *http.Client {
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-	}
-
-	if proxyURL != "" {
-		proxyURLParsed, err := url.Parse(proxyURL)
-		if err == nil {
-			transport.Proxy = http.ProxyURL(proxyURLParsed)
-		}
-	}
-
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
 }

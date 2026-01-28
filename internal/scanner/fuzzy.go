@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"fmt"
 	"math"
 	"strings"
 )
@@ -88,12 +89,7 @@ func (fm *FuzzyMatcher) FindFuzzyReflection(body, payload string) (string, int) 
 	lowerBody := strings.ToLower(body)
 	lowerPayload := strings.ToLower(payload)
 
-	// First, try exact match
-	if idx := strings.Index(lowerBody, lowerPayload); idx != -1 {
-		return body[idx : idx+len(payload)], idx
-	}
-
-	// Try case-insensitive match
+	// First, try exact match (case-insensitive)
 	if idx := strings.Index(lowerBody, lowerPayload); idx != -1 {
 		return body[idx : idx+len(payload)], idx
 	}
@@ -210,9 +206,7 @@ func htmlHexEncode(s string) string {
 	var result strings.Builder
 	for _, r := range s {
 		if r == '<' || r == '>' || r == '"' || r == '\'' || r == '&' {
-			result.WriteString("&#x")
-			result.WriteString(strings.ToLower(string([]byte{byte(r)})))
-			result.WriteString(";")
+			result.WriteString(fmt.Sprintf("&#x%x;", r))
 		} else {
 			result.WriteRune(r)
 		}
@@ -227,8 +221,7 @@ func urlEncode(s string) string {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
 			result.WriteRune(r)
 		} else {
-			result.WriteString("%")
-			result.WriteString(strings.ToUpper(string([]byte{byte(r >> 4), byte(r & 0xf)})))
+			result.WriteString(fmt.Sprintf("%%%02X", byte(r)))
 		}
 	}
 	return result.String()
@@ -241,8 +234,7 @@ func unicodeEncode(s string) string {
 		if r < 128 && ((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
 			result.WriteRune(r)
 		} else {
-			result.WriteString("\\u")
-			result.WriteString(strings.ToLower(strings.Repeat("0", 4-len(strings.TrimLeft(string(rune(r)), "0")))))
+			result.WriteString(fmt.Sprintf("\\u%04x", r))
 		}
 	}
 	return result.String()
@@ -255,12 +247,7 @@ func utf16Encode(s string) string {
 		if r < 128 && ((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
 			result.WriteRune(r)
 		} else {
-			result.WriteString("\\x")
-			hex := strings.ToLower(string([]byte{byte(r)}))
-			if len(hex) < 2 {
-				hex = "0" + hex
-			}
-			result.WriteString(hex)
+			result.WriteString(fmt.Sprintf("\\x%02x", byte(r)))
 		}
 	}
 	return result.String()

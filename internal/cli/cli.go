@@ -65,6 +65,10 @@ var (
 	fuzzyThreshold float64
 	storedXSS      bool
 	domDeepScan    bool
+
+	// Verification options
+	strictVerification bool
+	onlyVerified       bool
 )
 
 func Execute() error {
@@ -261,36 +265,38 @@ Features:
 
 			// Create scanner config
 			cfg := &config.ScanConfig{
-				TargetURL:        targetURLs[0],
-				TargetURLs:       targetURLs,
-				URLListFile:      urlListFile,
-				PayloadFile:      payloadFile,
-				VisibleMode:      visibleMode,
-				WAFType:          wafType,
-				SmartPayload:     !noSmart,
-				OutputFormat:     outputFormat,
-				OutputFile:       outputFile,
-				Threads:          threads,
-				Timeout:          timeout,
-				Verbose:          verbose,
-				Silent:           silent,
-				ProxyURL:         proxyURL,
-				ProxyEnabled:     proxyURL != "",
-				Cookies:          cookies,
-				Headers:          customHeaders,
-				AuthHeader:       authHeader,
-				Delay:            delay,
-				FuzzHeaders:      fuzzHeaders,
-				FuzzMode:         hasFuzzHeaders,
-				BlindXSSCallback: blindCallback,
-				BlindXSSEnabled:  blindCallback != "",
-				ScanSSTI:         scanSSTI,
-				ScanOpenRedirect: scanOpenRedirect,
-				CheckSecHeaders:  checkSecHeaders,
-				FuzzyMatching:    fuzzyMatching,
-				FuzzyThreshold:   fuzzyThreshold,
-				StoredXSS:        storedXSS,
-				DOMDeepScan:      domDeepScan,
+				TargetURL:          targetURLs[0],
+				TargetURLs:         targetURLs,
+				URLListFile:        urlListFile,
+				PayloadFile:        payloadFile,
+				VisibleMode:        visibleMode,
+				WAFType:            wafType,
+				SmartPayload:       !noSmart,
+				OutputFormat:       outputFormat,
+				OutputFile:         outputFile,
+				Threads:            threads,
+				Timeout:            timeout,
+				Verbose:            verbose,
+				Silent:             silent,
+				ProxyURL:           proxyURL,
+				ProxyEnabled:       proxyURL != "",
+				Cookies:            cookies,
+				Headers:            customHeaders,
+				AuthHeader:         authHeader,
+				Delay:              delay,
+				FuzzHeaders:        fuzzHeaders,
+				FuzzMode:           hasFuzzHeaders,
+				BlindXSSCallback:   blindCallback,
+				BlindXSSEnabled:    blindCallback != "",
+				ScanSSTI:           scanSSTI,
+				ScanOpenRedirect:   scanOpenRedirect,
+				CheckSecHeaders:    checkSecHeaders,
+				FuzzyMatching:      fuzzyMatching,
+				FuzzyThreshold:     fuzzyThreshold,
+				StoredXSS:          storedXSS,
+				DOMDeepScan:        domDeepScan,
+				StrictVerification: strictVerification,
+				OnlyVerified:       onlyVerified,
 			}
 
 			// Print configuration summary
@@ -331,10 +337,24 @@ Features:
 
 				allResults = append(allResults, results)
 
+				// Filter results if --verified is used
+				var vulnerabilitiesToReport []config.Vulnerability
+				if onlyVerified {
+					for _, v := range results.Vulnerabilities {
+						if strings.Contains(strings.ToLower(v.Context), "confirmed") || strings.Contains(strings.ToLower(v.Type), "confirmed") {
+							vulnerabilitiesToReport = append(vulnerabilitiesToReport, v)
+						}
+					}
+					// Update results with filtered list
+					results.Vulnerabilities = vulnerabilitiesToReport
+				} else {
+					vulnerabilitiesToReport = results.Vulnerabilities
+				}
+
 				// Print results for this URL
-				if len(results.Vulnerabilities) > 0 {
-					color.Red("\n[!] Found %d XSS vulnerabilities!", len(results.Vulnerabilities))
-					printVulnerabilities(results.Vulnerabilities)
+				if len(vulnerabilitiesToReport) > 0 {
+					color.Red("\n[!] Found %d XSS vulnerabilities!", len(vulnerabilitiesToReport))
+					printVulnerabilities(vulnerabilitiesToReport)
 				} else {
 					color.Green("\n[✓] No XSS vulnerabilities found.")
 				}
@@ -408,6 +428,10 @@ Features:
 	rootCmd.Flags().Float64Var(&fuzzyThreshold, "fuzzy-threshold", 0.8, "Threshold for fuzzy matching (0.0-1.0)")
 	rootCmd.Flags().BoolVar(&storedXSS, "stored", false, "Enable stored XSS testing mode")
 	rootCmd.Flags().BoolVar(&domDeepScan, "dom-deep", true, "Enable deep DOM analysis")
+
+	// Verification flags
+	rootCmd.Flags().BoolVar(&strictVerification, "strict", true, "Enable strict verification (alert confirmation required)")
+	rootCmd.Flags().BoolVar(&onlyVerified, "verified", false, "Report ONLY confirmed vulnerabilities (suppress potential ones)")
 
 	return rootCmd.Execute()
 }
