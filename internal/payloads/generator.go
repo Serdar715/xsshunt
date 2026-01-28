@@ -57,6 +57,38 @@ func (g *Generator) GetPayloads(wafType string) []string {
 	// Add WAF-specific bypass payloads
 	payloads = append(payloads, g.getWAFSpecificPayloads(wafType)...)
 
+	// Add dynamic encodings and obfuscation for advanced WAF bypass
+	// This takes base payloads and applies random encoding/obfuscation
+	// Especially useful if a WAF is detected
+	if wafType != "" || g.smartMode {
+		encoder := NewEncoder()
+		obfuscator := NewObfuscator()
+
+		var dynamicPayloads []string
+
+		// Use a subset of reliable payloads as base to avoid explosion
+		base := g.getBasePayloads()
+		if len(base) > 20 {
+			base = base[:20] // Take top 20 reliable ones
+		}
+
+		for _, p := range base {
+			// 1. Obfuscation
+			dynamicPayloads = append(dynamicPayloads, obfuscator.GenerateVariants(p)...)
+
+			// 2. Encoding (applied to original and obfuscated)
+			// We only encode a few key ones to check protocol blocking
+			dynamicPayloads = append(dynamicPayloads, encoder.URLEncode(p))
+			dynamicPayloads = append(dynamicPayloads, encoder.DoubleURLEncode(p))
+
+			// For some, we try unicode (only if <script found)
+			if strings.Contains(p, "<script") {
+				dynamicPayloads = append(dynamicPayloads, encoder.UnicodeEncode(p))
+			}
+		}
+		payloads = append(payloads, dynamicPayloads...)
+	}
+
 	// Add smart/polyglot payloads if enabled
 	if g.smartMode {
 		payloads = append(payloads, g.getSmartPayloads()...)

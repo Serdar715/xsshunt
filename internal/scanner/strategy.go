@@ -13,7 +13,7 @@ import (
 type VerificationResult struct {
 	Confirmed  bool
 	Message    string
-	Context    string // "Alert", "DOM", etc.
+	Context    string  // "Alert", "DOM", etc.
 	Confidence float64 // 0.0 - 1.0
 }
 

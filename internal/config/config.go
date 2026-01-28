@@ -18,7 +18,7 @@ type ScanConfig struct {
 	// Browser configuration
 	VisibleMode bool
 	Timeout     int // Request timeout in seconds
-	
+
 	// Browser wait times (configurable)
 	BrowserWaitTime int // Time to wait for page stability in ms (default 1500)
 	NavigationDelay int // Time to wait for navigation in ms (default 500)
@@ -88,10 +88,10 @@ type Vulnerability struct {
 	WAFBypassed bool              `json:"waf_bypassed"` // Whether WAF was bypassed
 	Evidence    string            `json:"evidence"`     // DOM evidence
 	Headers     map[string]string `json:"headers,omitempty"`
-	
+
 	// Verification details
-	Verified bool   `json:"verified"`           // True if confirmed by browser
-	Method   string `json:"method,omitempty"`   // "Browser Execution", "Static Reflection"
+	Verified bool   `json:"verified"`         // True if confirmed by browser
+	Method   string `json:"method,omitempty"` // "Browser Execution", "Static Reflection"
 }
 
 // ScanResult contains the complete scan results
@@ -156,6 +156,6 @@ func DefaultConfig() *ScanConfig {
 		SmartMode:          true,
 		StrictVerification: false, // Default to Hybrid: Report reflection even if unverified (Medium Confidence)
 		StaticOnly:         false,
-		OnlyVerified:       false, 
+		OnlyVerified:       false,
 	}
 }

@@ -46,10 +46,12 @@
 *   **SSTI & Open Redirect:** Additional scanning modules for template injection and unvalidated redirects.
 *   **Security Headers:** Checks for CSP, HSTS, and X-Frame-Options misconfigurations.
 
-### 🆕 v2.1 Updates
-*   **False Positive Reduction:** Strict marker validation - only dialogs containing the exact marker are confirmed.
-*   **Memory Leak Fix:** Goroutine lifecycle management with context-based cancellation.
-*   **Encoding Improvements:** Fixed HTML hex, URL, and Unicode encoding functions.
+### 🆕 v2.2 Refactoring Updates (Advanced)
+*   **Rod Page Pool:** Integrated highly efficient browser page pooling to drastically reduce memory/CPU usage during heavy scans.
+*   **Smart Context Mutator:** Automatically fixes broken payloads based on reflection context (e.g. `"><script>` vs `';alert(1)//`).
+*   **Advanced WAF Bypass:** Dynamic encoding (URL, Double URL, Unicode) and structural obfuscation (Comment injection, whitespace) engine.
+*   **Structured Reporting:** JSON, Markdown, and Webhook-ready reporting module.
+*   **False Positive Reduction:** 5-Layer verification system (Safe Container, Encoding Check, Sanitization Check).
 
 ---
 

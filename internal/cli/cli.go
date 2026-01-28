@@ -322,12 +322,12 @@ Features:
 			go func() {
 				<-sigChan
 				color.Yellow("\n\n[!] Scan interrupted by user (Ctrl+C)")
-				
+
 				// Close current scanner if exists
 				if currentScanner != nil {
 					currentScanner.Close()
 				}
-				
+
 				// Show results collected so far
 				if len(allResults) > 0 {
 					finalResults := mergeResults(allResults, targetURLs)
@@ -339,7 +339,7 @@ Features:
 				} else {
 					color.Yellow("[*] No vulnerabilities found before interruption.")
 				}
-				
+
 				os.Exit(0)
 			}()
 

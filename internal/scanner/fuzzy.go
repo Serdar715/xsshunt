@@ -97,7 +97,7 @@ func (fm *FuzzyMatcher) FindFuzzyReflection(body, payload string) (string, int) 
 		if end > len(body) {
 			end = len(body)
 		}
-		return body[idx : end], idx
+		return body[idx:end], idx
 	}
 
 	// Try fuzzy matching with sliding window

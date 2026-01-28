@@ -40,7 +40,7 @@ func TestInjectMarker(t *testing.T) {
 			payload: "(confirm``)",
 			// Raw logic: no script tag, no event handler, so only param replacement unless strict check fails
 			// But our new logic checks for '(' and fallback
-			want:    fmt.Sprintf("window['%s']=true;(confirm('%s'))", marker, marker),
+			want: fmt.Sprintf("window['%s']=true;(confirm('%s'))", marker, marker),
 		},
 	}
 
@@ -53,9 +53,9 @@ func TestInjectMarker(t *testing.T) {
 				t.Errorf("InjectMarker() did not modify payload: %v", tt.payload)
 			}
 			/*
-			if !containsMarker(got, marker) {
-				t.Errorf("InjectMarker() = %v, want marker %v inside", got, marker)
-			}
+				if !containsMarker(got, marker) {
+					t.Errorf("InjectMarker() = %v, want marker %v inside", got, marker)
+				}
 			*/
 			// Debug için yazdır
 			t.Logf("Input: %s -> Output: %s", tt.payload, got)

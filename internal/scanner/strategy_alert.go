@@ -51,18 +51,22 @@ func (s *AlertVerificationStrategy) Name() string {
 func (s *AlertVerificationStrategy) InjectMarker(payload, marker string) string {
 	newPayload := payload
 
-	// 1. Alert Message Replacement (Existing logic)
-	// Replace function calls with arguments: alert(1) -> alert('MARKER')
-	newPayload = s.reFunc.ReplaceAllString(newPayload, fmt.Sprintf("${1}('%s')", marker))
-	newPayload = s.reEmpty.ReplaceAllString(newPayload, fmt.Sprintf("${1}('%s')", marker))
-	newPayload = s.reTemplate.ReplaceAllString(newPayload, fmt.Sprintf("${1}('%s')", marker))
-	newPayload = s.reWrapped.ReplaceAllString(newPayload, fmt.Sprintf("(${1}('%s'))", marker))
-	newPayload = s.reArrayMethod.ReplaceAllString(newPayload, fmt.Sprintf("[${1}].${2}(function(){${3}('%s')})", marker))
-	
+	// 1. Alert Message Replacement (Robust)
+	// Use String.fromCharCode to avoid quote escaping issues (e.g. inside single vs double quotes)
+	// alert(1) -> alert(String.fromCharCode(88,83...))
+	safeMarker := s.generateSafeString(marker)
+
+	newPayload = s.reFunc.ReplaceAllString(newPayload, fmt.Sprintf("${1}(%s)", safeMarker))
+	newPayload = s.reEmpty.ReplaceAllString(newPayload, fmt.Sprintf("${1}(%s)", safeMarker))
+	newPayload = s.reTemplate.ReplaceAllString(newPayload, fmt.Sprintf("${1}(%s)", safeMarker))
+	newPayload = s.reWrapped.ReplaceAllString(newPayload, fmt.Sprintf("(${1}(%s))", safeMarker))
+	newPayload = s.reArrayMethod.ReplaceAllString(newPayload, fmt.Sprintf("[${1}].${2}(function(){${3}(%s)})", safeMarker))
+
 	// 2. DOM Persistence Injection (New logic)
 	// Even if alert listener fails, this allows us to verify via DOM check
-	domInjection := fmt.Sprintf("window['%s']=true;", marker)
-	
+	// Use safe property access: window[String.fromCharCode(...)]=true
+	domInjection := fmt.Sprintf("window[%s]=true;", safeMarker)
+
 	if s.reScriptTag.MatchString(newPayload) {
 		// <script>alert(1)</script> -> <script>window['MARKER']=true;alert('MARKER')</script>
 		// We insert after the open script tag
@@ -81,7 +85,7 @@ func (s *AlertVerificationStrategy) InjectMarker(payload, marker string) string 
 	} else if strings.Contains(strings.ToLower(newPayload), "onclick=") {
 		newPayload = strings.Replace(newPayload, "onclick=", "onclick="+domInjection, 1)
 	}
-	
+
 	// Fallback for raw JS payloads (not tags)
 	if newPayload == payload && !strings.Contains(payload, "<") {
 		// e.g. alert(1) -> window['MARKER']=true;alert(1)
@@ -111,16 +115,18 @@ func (s *AlertVerificationStrategy) Verify(ctx context.Context, page *rod.Page, 
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	// Channel to signal when to stop listening
-	done := make(chan struct{})
-
 	// Async Dialog Listener with PROPER SYNCHRONIZATION
+	// Fix: Use a separate context for the listener to ensure clean cancellation
+	listenerCtx, cancelListener := context.WithTimeout(ctx, s.browserWaitTime+2*time.Second)
+	defer cancelListener()
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		
-		// Safe event listener
-		page.EachEvent(func(e *proto.PageJavascriptDialogOpening) bool {
+
+		// Safe event listener with auto-cancellation via context
+		// rods EachEvent blocks until the context is done or handler returns true
+		page.Context(listenerCtx).EachEvent(func(e *proto.PageJavascriptDialogOpening) bool {
 			mu.Lock()
 			// Check if message contains our unique marker
 			if strings.Contains(e.Message, marker) {
@@ -134,15 +140,8 @@ func (s *AlertVerificationStrategy) Verify(ctx context.Context, page *rod.Page, 
 			handle := proto.PageHandleJavaScriptDialog{Accept: true}
 			_ = handle.Call(page)
 
-			// Check if we should stop listening
-			select {
-			case <-done:
-				return true // Stop listening
-			case <-ctx.Done():
-				return true // Context cancelled
-			default:
-				return false // Continue listening
-			}
+			// Continue listening until context expires
+			return false
 		})
 	}()
 
@@ -152,30 +151,18 @@ func (s *AlertVerificationStrategy) Verify(ctx context.Context, page *rod.Page, 
 	// Navigate with timeout context
 	navCtx, cancel := context.WithTimeout(ctx, 30*time.Second) // Safety timeout
 	defer cancel()
-	
+
 	// Navigate but don't fail immediately on timeout as partial load might trigger XSS
 	_ = page.Context(navCtx).Navigate(urlStr)
 
-	// Wait for execution
+	// Wait for execution to trigger dialogs
 	time.Sleep(s.browserWaitTime)
 
-	// Signal goroutine to stop
-	close(done)
-	
-	// CRITICAL FIX: Wait for goroutine to finish to avoid race conditions
-	// Use a channel with timeout to avoid deadlocks
-	waitCh := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(waitCh)
-	}()
-	
-	select {
-	case <-waitCh:
-		// Clean exit
-	case <-time.After(1 * time.Second):
-		// Force move on if listener is stuck
-	}
+	// Stop listener (this unblocks EachEvent)
+	cancelListener()
+
+	// Wait for listener goroutine to finish safely
+	wg.Wait()
 
 	// DOM Check Fallback (if alert didn't fire)
 	mu.Lock()
@@ -205,4 +192,14 @@ func (s *AlertVerificationStrategy) Verify(ctx context.Context, page *rod.Page, 
 	}
 
 	return result, nil
+}
+
+// generateSafeString converts a string to String.fromCharCode(c1, c2...) representation
+// This avoids issues with quotes (single vs double) when injecting into existing strings.
+func (s *AlertVerificationStrategy) generateSafeString(input string) string {
+	var chars []string
+	for _, c := range input {
+		chars = append(chars, fmt.Sprintf("%d", c))
+	}
+	return fmt.Sprintf("String.fromCharCode(%s)", strings.Join(chars, ","))
 }
