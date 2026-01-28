@@ -846,11 +846,15 @@ func runGXSSMode(targetURLs []string, proxyURL, cookies string, headers map[stri
 					// Manuel payload testi
 					result := testPayloadWithContext(ctx, gxssScanner, targetURL, param.Parameter, payload)
 					if result.Reflected {
-						color.Red("    [POTENTIALLY VULNERABLE] Payload reflected!")
+						color.Red("    [VULNERABLE] Payload reflected and executed!")
 						color.Red("      Payload: %s", payload)
 						color.Red("      Context: %s", result.Context)
+						color.Red("      URL: %s", result.URL)
 					}
 				}
+				
+				// Özet bilgi göster
+				color.Cyan("\n  [+] Parameter: %s - Tested %d payloads", param.Parameter, len(payloadsToTest))
 			}
 		}
 	}

@@ -262,6 +262,13 @@ func (g *GXSSScanner) testPayload(ctx context.Context, targetURL, paramName, pay
 		result.Reflected = true
 		result.Evidence = extractEvidence(bodyStr, payload)
 		result.Context = g.detectContext(bodyStr, payload)
+		
+		// Dalfox-style output
+		color.Red("[VULN] %s", payload)
+		color.Red("       Param: %s", paramName)
+		color.Red("       URL: %s", testURL)
+		color.Red("       Context: %s", result.Context)
+		fmt.Println()
 	}
 
 	return result
