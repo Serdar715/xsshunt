@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/Serdar715/xsshunt/internal/banner"
 	"github.com/Serdar715/xsshunt/internal/config"
@@ -306,6 +308,34 @@ Features:
 
 			// Process each URL
 			var allResults []*config.ScanResult
+			var currentScanner *scanner.Scanner
+
+			// Signal handler for graceful shutdown (Ctrl+C)
+			sigChan := make(chan os.Signal, 1)
+			signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+			go func() {
+				<-sigChan
+				color.Yellow("\n\n[!] Scan interrupted by user (Ctrl+C)")
+				
+				// Close current scanner if exists
+				if currentScanner != nil {
+					currentScanner.Close()
+				}
+				
+				// Show results collected so far
+				if len(allResults) > 0 {
+					finalResults := mergeResults(allResults, targetURLs)
+					if len(finalResults.Vulnerabilities) > 0 {
+						color.Red("\n[!] Vulnerabilities found before interruption:")
+						printVulnerabilities(finalResults.Vulnerabilities)
+					}
+					printSummary(finalResults, len(targetURLs))
+				} else {
+					color.Yellow("[*] No vulnerabilities found before interruption.")
+				}
+				
+				os.Exit(0)
+			}()
 
 			for i, targetURL := range targetURLs {
 				if !silent {
@@ -320,15 +350,17 @@ Features:
 				cfg.TargetURL = targetURL
 
 				// Initialize scanner
-				xssScanner, err := scanner.New(cfg)
+				var err error
+				currentScanner, err = scanner.New(cfg)
 				if err != nil {
 					color.Red("[!] Failed to initialize scanner for %s: %v", truncateURL(targetURL, 40), err)
 					continue
 				}
 
 				// Run scan
-				results, err := xssScanner.Scan()
-				xssScanner.Close()
+				results, err := currentScanner.Scan()
+				currentScanner.Close()
+				currentScanner = nil
 
 				if err != nil {
 					color.Red("[!] Scan failed for %s: %v", truncateURL(targetURL, 40), err)

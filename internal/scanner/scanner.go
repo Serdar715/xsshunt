@@ -262,8 +262,19 @@ func (s *Scanner) worker(wg *sync.WaitGroup, jobs <-chan string, baseURL, paramN
 			if !s.seenVulns[vulnKey] {
 				s.seenVulns[vulnKey] = true
 				s.results.Vulnerabilities = append(s.results.Vulnerabilities, *vuln)
+				vulnCount := len(s.results.Vulnerabilities)
 				s.mu.Unlock()
-				color.Red("  [!] XSS Found: %s", truncate(payload, 60))
+				
+				// Real-time vulnerability reporting
+				color.Red("\n  ╔══════════════════════════════════════════════════════════╗")
+				color.Red("  ║  🔴 XSS VULNERABILITY FOUND! (#%d)                        ║", vulnCount)
+				color.Red("  ╚══════════════════════════════════════════════════════════╝")
+				color.Yellow("  Type:      %s", vuln.Type)
+				color.Cyan("  Payload:   %s", truncate(vuln.Payload, 60))
+				color.White("  Parameter: %s", vuln.Parameter)
+				color.White("  Context:   %s", vuln.Context)
+				color.White("  Severity:  %s", vuln.Severity)
+				fmt.Println()
 			} else {
 				s.mu.Unlock()
 			}
