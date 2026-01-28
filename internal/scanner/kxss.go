@@ -47,6 +47,8 @@ type KXSSResult struct {
 	Vulnerable        bool
 	Evidence          string
 	SuggestedPayloads []string // Context'e göre önerilen payloadlar
+	Probe             string   // Test için kullanılan probe
+	ReflectionFormat  string   // Yansıma formatı (raw, encoded, etc.)
 }
 
 // KXSSScanner implements KXSS-style parameter testing
@@ -226,13 +228,30 @@ func (k *KXSSScanner) testParameter(targetURL, paramName string) KXSSResult {
 
 	bodyStr := string(body)
 
-	// Check if probe is reflected
+	// Probe'u kaydet
+	result.Probe = probe
+
+	// Check if probe is reflected - farklı formatlarda kontrol et
+	reflectionFormat := ""
 	if strings.Contains(bodyStr, probe) {
+		reflectionFormat = "raw"
+	}
+	
+	// URL encoded kontrol
+	if reflectionFormat == "" {
+		encodedProbe := url.QueryEscape(probe)
+		if strings.Contains(bodyStr, encodedProbe) {
+			reflectionFormat = "url-encoded"
+		}
+	}
+	
+	if reflectionFormat != "" {
 		result.Reflected = true
+		result.ReflectionFormat = reflectionFormat
 		result.Evidence = extractEvidence(bodyStr, probe)
 
-		// Check for filtering
-		result.FilteredChars = k.detectFiltering(bodyStr, probe)
+		// Check for filtering - özel karakterleri test et
+		result.FilteredChars = k.testSpecialCharFiltering(targetURL, paramName)
 		result.Filtered = len(result.FilteredChars) > 0
 
 		// Determine context
@@ -282,6 +301,88 @@ func (k *KXSSScanner) detectFiltering(body, probe string) []string {
 		}
 	}
 
+	return filtered
+}
+
+// testSpecialCharFiltering tests special characters with actual requests to detect filtering
+func (k *KXSSScanner) testSpecialCharFiltering(targetURL, paramName string) []string {
+	var filtered []string
+	
+	// Test characters that are commonly filtered
+	testChars := map[string][]string{
+		"<":  {"<", "&lt;", "%3C", "%3c"},
+		">":  {">", "&gt;", "%3E", "%3e"},
+		"'":  {"'", "&#39;", "&#x27;", "%27"},
+		"\"": {"\"", "&quot;", "%22"},
+		"&":  {"&", "&amp;", "%26"},
+		";":  {";", "%3B", "%3b"},
+		"(":  {"(", "%28"},
+		")":  {")", "%29"},
+		"{":  {"{", "%7B", "%7b"},
+		"}":  {"}", "%7D", "%7d"},
+		"`":  {"`", "%60"},
+	}
+	
+	// Use a fixed unique probe for consistency
+	baseProbe := fmt.Sprintf("kxssfilter%d", time.Now().UnixNano()%10000)
+	
+	for char, encodedForms := range testChars {
+		testProbe := baseProbe + char
+		
+		// Build test URL
+		parsedURL, err := url.Parse(targetURL)
+		if err != nil {
+			continue
+		}
+		
+		params := parsedURL.Query()
+		params.Set(paramName, testProbe)
+		parsedURL.RawQuery = params.Encode()
+		testURL := parsedURL.String()
+		
+		// Make request
+		req, err := http.NewRequest("GET", testURL, nil)
+		if err != nil {
+			continue
+		}
+		
+		k.setHeaders(req)
+		
+		resp, err := k.client.Do(req)
+		if err != nil {
+			continue
+		}
+		
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+		resp.Body.Close()
+		if err != nil {
+			continue
+		}
+		
+		bodyStr := string(body)
+		
+		// Check if the base probe is reflected at all
+		if !strings.Contains(bodyStr, baseProbe) {
+			// Base probe not found, skip this test
+			continue
+		}
+		
+		// Check if the character appears in ANY form (raw or encoded)
+		charFound := false
+		for _, form := range encodedForms {
+			probeWithForm := baseProbe + form
+			if strings.Contains(bodyStr, probeWithForm) {
+				charFound = true
+				break
+			}
+		}
+		
+		// If character is not found in any form, it's filtered
+		if !charFound {
+			filtered = append(filtered, char)
+		}
+	}
+	
 	return filtered
 }
 
@@ -459,36 +560,63 @@ func GetPayloadsForContext(context string, filteredChars []string) []string {
 
 // PrintKXSSResults prints KXSS results
 func PrintKXSSResults(results []KXSSResult) {
-	if len(results) == 0 {
+	// Sadece yansıyan parametreleri filtrele
+	var reflectedResults []KXSSResult
+	for _, r := range results {
+		if r.Reflected {
+			reflectedResults = append(reflectedResults, r)
+		}
+	}
+
+	if len(reflectedResults) == 0 {
 		color.Yellow("[*] No reflected parameters found")
 		return
 	}
 
-	color.Cyan("\n[*] KXSS Results: Found %d reflected parameters", len(results))
+	color.Cyan("\n┌─────────────────────────────────────────────────┐")
+	color.Cyan("│            KXSS REFLECTION RESULTS              │")
+	color.Cyan("└─────────────────────────────────────────────────┘")
+	color.Cyan("[*] Found %d reflected parameters", len(reflectedResults))
 
-	for _, r := range results {
+	for i, r := range reflectedResults {
+		fmt.Println()
 		if r.Vulnerable {
-			color.Red("  [VULNERABLE] Parameter: %s", r.Parameter)
-			color.Red("    URL: %s", r.URL)
-			color.Red("    Context: %s", r.Context)
+			color.Red("════════ Parameter #%d [VULNERABLE] ════════", i+1)
+			color.Red("  Parameter: %s", r.Parameter)
+			color.Red("  Probe: %s", r.Probe)
+			color.Red("  Format: %s", r.ReflectionFormat)
+			color.Red("  Context: %s", r.Context)
+			color.Yellow("  URL: %s", r.URL)
 			if len(r.FilteredChars) > 0 {
-				color.Yellow("    Filtered: %v", r.FilteredChars)
+				color.Yellow("  Filtered Chars: %v", r.FilteredChars)
+			} else {
+				color.Green("  Filtered Chars: NONE (all chars pass)")
 			}
 			if len(r.SuggestedPayloads) > 0 {
-				color.Cyan("    Suggested Payloads:")
+				color.Cyan("  Suggested Payloads:")
 				for _, p := range r.SuggestedPayloads {
-					color.White("      - %s", p)
+					color.White("    → %s", p)
 				}
 			}
-		} else if r.Reflected {
-			color.Yellow("  [REFLECTED] Parameter: %s", r.Parameter)
-			color.Yellow("    URL: %s", r.URL)
+		} else {
+			color.Yellow("════════ Parameter #%d [REFLECTED] ════════", i+1)
+			color.Yellow("  Parameter: %s", r.Parameter)
+			color.Yellow("  Probe: %s", r.Probe)
+			color.Yellow("  Format: %s", r.ReflectionFormat)
+			color.Yellow("  Context: %s", r.Context)
+			color.Cyan("  URL: %s", r.URL)
+			if len(r.FilteredChars) > 0 {
+				color.Yellow("  Filtered Chars: %v", r.FilteredChars)
+			} else {
+				color.Green("  Filtered Chars: NONE (all chars pass)")
+			}
 			if len(r.SuggestedPayloads) > 0 {
-				color.Cyan("    Try Payloads:")
+				color.Cyan("  Try Payloads:")
 				for _, p := range r.SuggestedPayloads {
-					color.White("      - %s", p)
+					color.White("    → %s", p)
 				}
 			}
 		}
 	}
+	fmt.Println()
 }

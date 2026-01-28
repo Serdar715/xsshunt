@@ -826,35 +826,67 @@ func runGXSSMode(targetURLs []string, proxyURL, cookies string, headers map[stri
 
 			gxssScanner := scanner.NewGXSSScanner(gxssConfig)
 
-			// Her yansıyan parametre için önerilen payloadları test et
+			// Her yansıyan parametre için payloadları test et
 			for _, param := range reflectedParams {
-				color.Cyan("\n  Testing parameter: %s (Context: %s)", param.Parameter, param.Context)
+				color.Cyan("\n┌─────────────────────────────────────────────────┐")
+				color.Cyan("│  Testing Parameter: %-28s│", param.Parameter)
+				color.Cyan("│  Context: %-38s│", param.Context)
+				color.Cyan("└─────────────────────────────────────────────────┘")
 				
-				// Payloadları al (eğer boşsa varsayılanları kullan)
-				payloadsToTest := param.SuggestedPayloads
-				if len(payloadsToTest) == 0 {
-					payloadsToTest = scanner.GetPayloadsForContext(param.Context, param.FilteredChars)
+				// Tüm payloadları birleştir (unique olanlar)
+				payloadSet := make(map[string]bool)
+				var allPayloads []string
+				
+				// 1. Varsayılan GXSS payloadlarını ekle
+				defaultPayloads := scanner.GetAllGXSSPayloads()
+				for _, p := range defaultPayloads {
+					if !payloadSet[p] {
+						payloadSet[p] = true
+						allPayloads = append(allPayloads, p)
+					}
 				}
 				
-				// Önerilen payloadları GXSS config'ine ekle
-				gxssConfig.Payloads = payloadsToTest
+				// 2. KXSS önerilen payloadları ekle
+				for _, p := range param.SuggestedPayloads {
+					if !payloadSet[p] {
+						payloadSet[p] = true
+						allPayloads = append(allPayloads, p)
+					}
+				}
+				
+				// 3. Context'e göre ek payloadlar ekle
+				contextPayloads := scanner.GetPayloadsForContext(param.Context, param.FilteredChars)
+				for _, p := range contextPayloads {
+					if !payloadSet[p] {
+						payloadSet[p] = true
+						allPayloads = append(allPayloads, p)
+					}
+				}
+				
+				color.White("  [*] Testing %d payloads (default + suggested + context-aware)\n", len(allPayloads))
+				
+				// Başarıyla yansıyan payloadları say
+				reflectedCount := 0
 				
 				// Payloadları test et
-				for _, payload := range payloadsToTest {
-					color.White("    Testing: %s", payload)
+				for _, payload := range allPayloads {
+					color.White("  [TEST] %s", payload)
 					
 					// Manuel payload testi
 					result := testPayloadWithContext(ctx, gxssScanner, targetURL, param.Parameter, payload)
+					
 					if result.Reflected {
-						color.Red("    [VULNERABLE] Payload reflected and executed!")
-						color.Red("      Payload: %s", payload)
-						color.Red("      Context: %s", result.Context)
-						color.Red("      URL: %s", result.URL)
+						reflectedCount++
+						// gxss.go'daki testPayload fonksiyonu zaten detaylı çıktı veriyor
 					}
 				}
 				
 				// Özet bilgi göster
-				color.Cyan("\n  [+] Parameter: %s - Tested %d payloads", param.Parameter, len(payloadsToTest))
+				if reflectedCount > 0 {
+					color.Green("\n  ✓ Parameter: %s - %d/%d payloads reflected", param.Parameter, reflectedCount, len(allPayloads))
+				} else {
+					color.Yellow("\n  ✗ Parameter: %s - 0/%d payloads reflected (filtered)", param.Parameter, len(allPayloads))
+				}
 			}
 		}
 	}
@@ -864,12 +896,6 @@ func runGXSSMode(targetURLs []string, proxyURL, cookies string, headers map[stri
 
 // testPayloadWithContext tests a single payload and returns result
 func testPayloadWithContext(ctx context.Context, gxssScanner *scanner.GXSSScanner, targetURL, param, payload string) scanner.GXSSResult {
-	// GXSS scanner'ı kullanarak payload testi yap
-	results, _ := gxssScanner.ScanURL(ctx, targetURL)
-	for _, r := range results {
-		if r.Parameter == param && r.Payload == payload {
-			return r
-		}
-	}
-	return scanner.GXSSResult{URL: targetURL, Parameter: param, Payload: payload}
+	// Doğrudan testPayload fonksiyonunu çağır
+	return gxssScanner.TestPayloadDirect(ctx, targetURL, param, payload)
 }

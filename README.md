@@ -46,7 +46,14 @@
 *   **SSTI & Open Redirect:** Additional scanning modules for template injection and unvalidated redirects.
 *   **Security Headers:** Checks for CSP, HSTS, and X-Frame-Options misconfigurations.
 
-### 🆕 v2.3 KXSS/GXSS Integration (NEW)
+### 🆕 v2.4 Maintainable Architecture (NEW)
+*   **Interface-Based Design:** SOLID principles with `ReflectionDetector`, `FilterTester`, `ContextDetector` interfaces.
+*   **Custom Error Types:** Comprehensive error handling with `ScanError` and sentinel errors for better debugging.
+*   **Modular Components:** Separated reflection detection, character filtering, and context analysis into independent modules.
+*   **Test Coverage:** 14+ unit tests covering reflection detection, error handling, and edge cases.
+*   **Dependency Injection Ready:** All components can be mocked for unit testing.
+
+### 🆕 v2.3 KXSS/GXSS Integration
 *   **KXSS Mode:** Smart parameter reflection testing with context detection (script, attribute, html, url).
 *   **GXSS Mode:** Fast payload testing based on KXSS context-aware suggestions.
 *   **Context-Aware Payloads:** Automatically selects best payloads based on reflection context and filtered characters.
