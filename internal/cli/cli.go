@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -74,6 +75,11 @@ var (
 	strictVerification bool
 	staticOnly         bool
 	onlyVerified       bool
+
+	// KXSS/GXSS mode options
+	kxssMode       bool
+	gxssMode       bool
+	testAllParams  bool
 )
 
 func Execute() error {
@@ -312,6 +318,16 @@ Features:
 				printConfigSummary(cfg, len(targetURLs))
 			}
 
+			// Handle KXSS mode
+			if kxssMode {
+				return runKXSSMode(targetURLs, proxyURL, cookies, customHeaders, authHeader, threads, testAllParams)
+			}
+
+			// Handle GXSS mode
+			if gxssMode {
+				return runGXSSMode(targetURLs, proxyURL, cookies, customHeaders, authHeader, threads)
+			}
+
 			// Process each URL
 			var allResults []*config.ScanResult
 			var currentScanner *scanner.Scanner
@@ -473,6 +489,11 @@ Features:
 	rootCmd.Flags().BoolVar(&strictVerification, "strict", false, "Enable strict verification (alert confirmation required)")
 	rootCmd.Flags().BoolVar(&staticOnly, "static-only", false, "Perform only static analysis (no browser verification)")
 	rootCmd.Flags().BoolVar(&onlyVerified, "verified", false, "Report ONLY confirmed vulnerabilities (suppress potential ones)")
+
+	// KXSS/GXSS mode flags
+	rootCmd.Flags().BoolVar(&kxssMode, "kxss", true, "Enable KXSS mode (smart payload suggestion based on context)")
+	rootCmd.Flags().BoolVar(&gxssMode, "gxss", true, "Enable GXSS mode (test suggested payloads from KXSS)")
+	rootCmd.Flags().BoolVar(&testAllParams, "test-all-params", true, "Test all common parameters (for KXSS mode)")
 
 	return rootCmd.Execute()
 }
@@ -731,4 +752,114 @@ func init() {
 	if os.Getenv("NO_COLOR") != "" {
 		color.NoColor = true
 	}
+}
+
+// runKXSSMode runs KXSS-style parameter testing
+func runKXSSMode(targetURLs []string, proxyURL, cookies string, headers map[string]string, authHeader string, threads int, testAllParams bool) error {
+	config := scanner.DefaultKXSSConfig()
+	config.ProxyURL = proxyURL
+	config.Cookies = cookies
+	config.Headers = headers
+	config.AuthHeader = authHeader
+	config.Threads = threads
+	config.TestAllParams = testAllParams
+
+	kxssScanner := scanner.NewKXSSScanner(config)
+
+	for _, targetURL := range targetURLs {
+		color.Cyan("\n[*] Running KXSS scan on: %s", targetURL)
+		results, err := kxssScanner.ScanURL(targetURL)
+		if err != nil {
+			color.Red("[!] Error scanning %s: %v", targetURL, err)
+			continue
+		}
+		scanner.PrintKXSSResults(results)
+	}
+
+	return nil
+}
+
+// runGXSSMode runs GXSS-style scanning with KXSS suggested payloads
+func runGXSSMode(targetURLs []string, proxyURL, cookies string, headers map[string]string, authHeader string, threads int) error {
+	// Önce KXSS ile context analizi yap
+	kxssConfig := scanner.DefaultKXSSConfig()
+	kxssConfig.ProxyURL = proxyURL
+	kxssConfig.Cookies = cookies
+	kxssConfig.Headers = headers
+	kxssConfig.AuthHeader = authHeader
+	kxssConfig.Threads = threads
+	kxssConfig.TestAllParams = testAllParams
+
+	kxssScanner := scanner.NewKXSSScanner(kxssConfig)
+
+	ctx := context.Background()
+
+	for _, targetURL := range targetURLs {
+		color.Cyan("\n[*] Running KXSS analysis on: %s", targetURL)
+		kxssResults, err := kxssScanner.ScanURL(targetURL)
+		if err != nil {
+			color.Red("[!] Error in KXSS scan %s: %v", targetURL, err)
+			continue
+		}
+
+		// KXSS sonuçlarını göster
+		scanner.PrintKXSSResults(kxssResults)
+
+		// Eğer yansıyan parametreler varsa, GXSS ile payload testi yap
+		var reflectedParams []scanner.KXSSResult
+		for _, r := range kxssResults {
+			if r.Reflected && len(r.SuggestedPayloads) > 0 {
+				reflectedParams = append(reflectedParams, r)
+			}
+		}
+
+		if len(reflectedParams) > 0 {
+			color.Cyan("\n[*] Running GXSS payload testing on reflected parameters...")
+			
+			gxssConfig := scanner.DefaultGXSSConfig()
+			gxssConfig.ProxyURL = proxyURL
+			gxssConfig.Cookies = cookies
+			gxssConfig.Headers = headers
+			gxssConfig.AuthHeader = authHeader
+			gxssConfig.Threads = threads
+			gxssConfig.Verbose = verbose
+
+			gxssScanner := scanner.NewGXSSScanner(gxssConfig)
+
+			// Her yansıyan parametre için önerilen payloadları test et
+			for _, param := range reflectedParams {
+				color.Cyan("\n  Testing parameter: %s (Context: %s)", param.Parameter, param.Context)
+				
+				// Önerilen payloadları GXSS config'ine ekle
+				gxssConfig.Payloads = param.SuggestedPayloads
+				
+				// Payloadları test et
+				for _, payload := range param.SuggestedPayloads {
+					color.White("    Testing: %s", payload)
+					
+					// Manuel payload testi
+					result := testPayloadWithContext(ctx, gxssScanner, targetURL, param.Parameter, payload)
+					if result.Reflected {
+						color.Red("    [POTENTIALLY VULNERABLE] Payload reflected!")
+						color.Red("      Payload: %s", payload)
+						color.Red("      Context: %s", result.Context)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// testPayloadWithContext tests a single payload and returns result
+func testPayloadWithContext(ctx context.Context, gxssScanner *scanner.GXSSScanner, targetURL, param, payload string) scanner.GXSSResult {
+	// GXSS scanner'ı kullanarak payload testi yap
+	results, _ := gxssScanner.ScanURL(ctx, targetURL)
+	for _, r := range results {
+		if r.Parameter == param && r.Payload == payload {
+			return r
+		}
+	}
+	return scanner.GXSSResult{URL: targetURL, Parameter: param, Payload: payload}
 }
