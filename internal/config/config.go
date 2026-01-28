@@ -18,6 +18,10 @@ type ScanConfig struct {
 	// Browser configuration
 	VisibleMode bool
 	Timeout     int // Request timeout in seconds
+	
+	// Browser wait times (configurable)
+	BrowserWaitTime int // Time to wait for page stability in ms (default 1500)
+	NavigationDelay int // Time to wait for navigation in ms (default 500)
 
 	// WAF configuration
 	WAFType string
@@ -69,6 +73,7 @@ type ScanConfig struct {
 	// Dalfox-Style Verification Options
 	SmartMode          bool // Check reflection before browser (Hybrid)
 	StrictVerification bool // Vulnerable only if execution (alert) is confirmed
+	StaticOnly         bool // Perform only static analysis (no browser)
 	OnlyVerified       bool // Report only confirmed vulnerabilities
 }
 
@@ -83,6 +88,10 @@ type Vulnerability struct {
 	WAFBypassed bool              `json:"waf_bypassed"` // Whether WAF was bypassed
 	Evidence    string            `json:"evidence"`     // DOM evidence
 	Headers     map[string]string `json:"headers,omitempty"`
+	
+	// Verification details
+	Verified bool   `json:"verified"`           // True if confirmed by browser
+	Method   string `json:"method,omitempty"`   // "Browser Execution", "Static Reflection"
 }
 
 // ScanResult contains the complete scan results
@@ -130,6 +139,8 @@ func DefaultConfig() *ScanConfig {
 		OutputFormat:       "json",
 		Threads:            5,
 		Timeout:            30,
+		BrowserWaitTime:    1500,
+		NavigationDelay:    500,
 		Verbose:            false,
 		ProxyEnabled:       false,
 		Headers:            make(map[string]string),
@@ -143,7 +154,8 @@ func DefaultConfig() *ScanConfig {
 		FollowRedirects:    false,
 		MaxRedirects:       3,
 		SmartMode:          true,
-		StrictVerification: true,
-		OnlyVerified:       false,
+		StrictVerification: false, // Default to Hybrid: Report reflection even if unverified (Medium Confidence)
+		StaticOnly:         false,
+		OnlyVerified:       false, 
 	}
 }

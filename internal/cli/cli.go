@@ -28,6 +28,8 @@ var (
 	// Browser options
 	visibleMode bool
 	timeout     int
+	browserWait int
+	navDelay    int
 
 	// WAF options
 	wafType string
@@ -70,6 +72,7 @@ var (
 
 	// Verification options
 	strictVerification bool
+	staticOnly         bool
 	onlyVerified       bool
 )
 
@@ -278,6 +281,8 @@ Features:
 				OutputFile:         outputFile,
 				Threads:            threads,
 				Timeout:            timeout,
+				BrowserWaitTime:    browserWait,
+				NavigationDelay:    navDelay,
 				Verbose:            verbose,
 				Silent:             silent,
 				ProxyURL:           proxyURL,
@@ -298,6 +303,7 @@ Features:
 				StoredXSS:          storedXSS,
 				DOMDeepScan:        domDeepScan,
 				StrictVerification: strictVerification,
+				StaticOnly:         staticOnly,
 				OnlyVerified:       onlyVerified,
 			}
 
@@ -421,6 +427,8 @@ Features:
 	// Browser flags
 	rootCmd.Flags().BoolVarP(&visibleMode, "visible", "v", false, "Run browser in visible mode")
 	rootCmd.Flags().IntVar(&timeout, "timeout", 30, "Request timeout in seconds")
+	rootCmd.Flags().IntVar(&browserWait, "browser-wait", 1500, "Browser wait time in ms for page stability")
+	rootCmd.Flags().IntVar(&navDelay, "nav-delay", 500, "Navigation delay in ms")
 
 	// WAF flags
 	rootCmd.Flags().StringVarP(&wafType, "waf", "w", "auto", "WAF type (auto, cloudflare, akamai, cloudfront, imperva, incapsula, wordfence, modsecurity, sucuri, f5, barracuda)")
@@ -462,7 +470,8 @@ Features:
 	rootCmd.Flags().BoolVar(&domDeepScan, "dom-deep", true, "Enable deep DOM analysis")
 
 	// Verification flags
-	rootCmd.Flags().BoolVar(&strictVerification, "strict", true, "Enable strict verification (alert confirmation required)")
+	rootCmd.Flags().BoolVar(&strictVerification, "strict", false, "Enable strict verification (alert confirmation required)")
+	rootCmd.Flags().BoolVar(&staticOnly, "static-only", false, "Perform only static analysis (no browser verification)")
 	rootCmd.Flags().BoolVar(&onlyVerified, "verified", false, "Report ONLY confirmed vulnerabilities (suppress potential ones)")
 
 	return rootCmd.Execute()

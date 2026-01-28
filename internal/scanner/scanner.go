@@ -114,7 +114,11 @@ func New(cfg *config.ScanConfig) (*Scanner, error) {
 		lastRequest: time.Now(),
 		browser:     browser,
 		httpClient:  httpClient,
-		strategy:    NewAlertStrategy(), // Approach C: Default strategy
+// Approach C: Default strategy with timeouts from config
+		strategy: NewAlertStrategy(
+			time.Duration(cfg.NavigationDelay)*time.Millisecond,
+			time.Duration(cfg.BrowserWaitTime)*time.Millisecond,
+		),
 	}
 
 	return scanner, nil
@@ -270,10 +274,19 @@ func (s *Scanner) worker(wg *sync.WaitGroup, jobs <-chan string, baseURL, paramN
 				color.Red("  ║  🔴 XSS VULNERABILITY FOUND! (#%d)                        ║", vulnCount)
 				color.Red("  ╚══════════════════════════════════════════════════════════╝")
 				color.Yellow("  Type:      %s", vuln.Type)
-				color.Cyan("  Payload:   %s", truncate(vuln.Payload, 60))
+				color.White("  Severity:  %s", vuln.Severity)
 				color.White("  Parameter: %s", vuln.Parameter)
 				color.White("  Context:   %s", vuln.Context)
-				color.White("  Severity:  %s", vuln.Severity)
+				
+				if vuln.Verified {
+					color.Green("  Verified:  ✅ YES (Method: %s)", vuln.Method)
+				} else {
+					color.Yellow("  Verified:  ⚠️ NO (Reflection Only) - Check Manually")
+				}
+				
+				fmt.Println()
+				color.Cyan("  Payload: %s", vuln.Payload)
+				color.Cyan("  PoC URL: %s", vuln.URL)
 				fmt.Println()
 			} else {
 				s.mu.Unlock()
@@ -333,24 +346,27 @@ func (scanner *Scanner) testPayload(testURL, payload, param string) (*config.Vul
 	marker := fmt.Sprintf("XSSHUNT_%s", randomString(8))
 	finalURL, verifiablePayload := scanner.prepareContext(testURL, payload, param, marker)
 
-	// 3. Setup Browser
-	page, disconnect, err := scanner.setupBrowserPage(finalURL)
-	if err != nil {
-		return nil, err
-	}
-	defer disconnect()
+	var verifyResult VerificationResult
 
-	// 4. Verification Check (Delegated to Strategy)
-	executionConfirmed, dialogMessage, err := scanner.strategy.Verify(scanner.ctx, page, finalURL, marker)
-	if err != nil {
-		// Log error if verbose but continue analysis
-		if scanner.config.Verbose {
+	// 3. Browser Verification (if not StaticOnly)
+	if !scanner.config.StaticOnly {
+		page, disconnect, err := scanner.setupBrowserPage(finalURL)
+		if err == nil {
+			defer disconnect()
 			
+			// 4. Verification Check (Delegated to Strategy)
+			verifyResult, err = scanner.strategy.Verify(scanner.ctx, page, finalURL, marker)
+			if err != nil && scanner.config.Verbose {
+				// Log verify error but continue to analysis
+			}
+		} else if scanner.config.Verbose {
+			// Log browser setup error
 		}
 	}
 
 	// 5. Decision Logic
-	return scanner.analyzeResult(executionConfirmed, dialogMessage, finalURL, verifiablePayload, param, marker)
+	// Use the structured result from the strategy
+	return scanner.analyzeResult(verifyResult.Confirmed, verifyResult.Message, finalURL, verifiablePayload, param, marker)
 }
 
 // Helper: Smart Mode Check
@@ -427,15 +443,11 @@ func (s *Scanner) setupBrowserPage(urlStr string) (*rod.Page, func(), error) {
 
 // Helper: Analyze Result
 func (s *Scanner) analyzeResult(executed bool, msg, urlStr, payload, param, marker string) (*config.Vulnerability, error) {
-	// Strict Verification
-	if s.config.StrictVerification {
-		isValid := false
-		if executed {
-			if strings.Contains(msg, marker) {
-				isValid = true
-			} else if msg == "DOM execution verified via window object" {
-				isValid = true
-			}
+	// 1. Browser Execution (High Confidence)
+	if executed {
+		isValid := true
+		if s.config.StrictVerification && !strings.Contains(msg, marker) && msg != "DOM execution verified via window object" {
+			isValid = false
 		}
 
 		if isValid {
@@ -448,23 +460,34 @@ func (s *Scanner) analyzeResult(executed bool, msg, urlStr, payload, param, mark
 				Severity:    "Critical",
 				WAFBypassed: s.results.WAFDetected != "",
 				Evidence:    fmt.Sprintf("Execution verified: %s", msg),
+				Verified:    true,
+				Method:      "Browser Execution",
 			}, nil
 		}
-		return nil, nil
 	}
 
-	// Loose Verification (Legacy/Fallback)
-	if executed {
-		return &config.Vulnerability{
-			Type:        "Confirmed XSS",
-			Payload:     payload,
-			URL:         urlStr,
-			Parameter:   param,
-			Context:     "Execution Verified (Fast)",
-			Severity:    "Critical",
-			WAFBypassed: s.results.WAFDetected != "",
-			Evidence:    msg,
-		}, nil
+	// 2. Static Reflection Check (Hybrid Mode / Medium Confidence)
+	// If execution failed (or was skipped) but StrictVerification is OFF,
+	// we check if the payload is reflected in the response body.
+	if !s.config.StrictVerification {
+		// Use checkReflection to see if payload exists in body
+		// Note: checkReflection performs an HTTP request to the URL
+		score := s.checkReflection(urlStr, payload)
+		
+		if score > 0.95 { // High reflection match
+			return &config.Vulnerability{
+				Type:        "Reflected XSS (Unverified)",
+				Payload:     payload,
+				URL:         urlStr,
+				Parameter:   param,
+				Context:     "Source Code Reflection",
+				Severity:    "Medium", // Lower severity because not verified by browser
+				WAFBypassed: s.results.WAFDetected != "",
+				Evidence:    "Payload reflected in response body (Static Analysis)",
+				Verified:    false,
+				Method:      "Static Reflection Analysis",
+			}, nil
+		}
 	}
 
 	return nil, nil

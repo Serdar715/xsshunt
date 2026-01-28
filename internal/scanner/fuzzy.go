@@ -91,7 +91,13 @@ func (fm *FuzzyMatcher) FindFuzzyReflection(body, payload string) (string, int) 
 
 	// First, try exact match (case-insensitive)
 	if idx := strings.Index(lowerBody, lowerPayload); idx != -1 {
-		return body[idx : idx+len(payload)], idx
+		// Safety check for slice bounds
+		// Note: strings.ToLower might change byte length, so we verify bounds
+		end := idx + len(payload)
+		if end > len(body) {
+			end = len(body)
+		}
+		return body[idx : end], idx
 	}
 
 	// Try fuzzy matching with sliding window

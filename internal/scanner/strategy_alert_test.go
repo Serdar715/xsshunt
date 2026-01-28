@@ -3,10 +3,11 @@ package scanner
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestInjectMarker(t *testing.T) {
-	strategy := NewAlertStrategy()
+	strategy := NewAlertStrategy(500*time.Millisecond, 1500*time.Millisecond)
 	marker := "TEST_MARKER"
 
 	tests := []struct {
@@ -17,27 +18,29 @@ func TestInjectMarker(t *testing.T) {
 		{
 			name:    "Basic Alert",
 			payload: "<script>alert(1)</script>",
-			want:    fmt.Sprintf("<script>alert('%s')</script>", marker),
+			want:    fmt.Sprintf("<script>window['%s']=true;alert('%s')</script>", marker, marker),
 		},
 		{
 			name:    "Confirm with string",
 			payload: "<img src=x onerror=confirm('xss')>",
-			want:    fmt.Sprintf("<img src=x onerror=confirm('%s')>", marker),
+			want:    fmt.Sprintf("<img src=x onerror=window['%s']=true;confirm('%s')>", marker, marker),
 		},
 		{
 			name:    "Prompt with spaces",
 			payload: "javascript:prompt(  1  )",
-			want:    fmt.Sprintf("javascript:prompt('%s')", marker),
+			want:    fmt.Sprintf("javascript:window['%s']=true;prompt('%s')", marker, marker),
 		},
 		{
 			name:    "Template Literal",
 			payload: "<script>alert`1`</script>",
-			want:    fmt.Sprintf("<script>alert('%s')</script>", marker),
+			want:    fmt.Sprintf("<script>window['%s']=true;alert('%s')</script>", marker, marker),
 		},
 		{
 			name:    "Nested Calls",
 			payload: "(confirm``)",
-			want:    fmt.Sprintf("(confirm('%s'))", marker),
+			// Raw logic: no script tag, no event handler, so only param replacement unless strict check fails
+			// But our new logic checks for '(' and fallback
+			want:    fmt.Sprintf("window['%s']=true;(confirm('%s'))", marker, marker),
 		},
 	}
 
