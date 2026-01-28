@@ -318,12 +318,12 @@ Features:
 				printConfigSummary(cfg, len(targetURLs))
 			}
 
-			// Handle KXSS mode
-			if kxssMode {
+			// Handle KXSS mode (sadece KXSS isteniyorsa)
+			if kxssMode && !gxssMode {
 				return runKXSSMode(targetURLs, proxyURL, cookies, customHeaders, authHeader, threads, testAllParams)
 			}
 
-			// Handle GXSS mode
+			// Handle GXSS mode (KXSS + GXSS birlikte çalışır)
 			if gxssMode {
 				return runGXSSMode(targetURLs, proxyURL, cookies, customHeaders, authHeader, threads)
 			}

