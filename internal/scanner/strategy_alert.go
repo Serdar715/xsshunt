@@ -34,27 +34,35 @@ func (s *AlertVerificationStrategy) Name() string {
 // InjectMarker replaces function calls in the payload with calls containing the marker.
 // Example: <script>alert(1)</script> -> <script>alert('MARKER')</script>
 func (s *AlertVerificationStrategy) InjectMarker(payload, marker string) string {
-	// Robust replacements using Regex to handle various alert syntaxes
-	// e.g. alert(1), alert  (1), alert('1'), confirm(1)
-
-	// 1. Replace function calls: alert(...) -> alert('MARKER')
-	// We match alert/confirm/prompt followed by anything in parens
+	// 1. Replace function calls with arguments: alert(1), alert('x'), confirm(anything)
 	reFunc := regexp.MustCompile(`(alert|confirm|prompt)\s*\([^)]*\)`)
-
-	// We want to replace valid calls with our marker call
-	// Note: We use ${1} to keep the function name (alert/confirm) but change args
 	newPayload := reFunc.ReplaceAllString(payload, fmt.Sprintf("${1}('%s')", marker))
 
-	// 2. Handle template strings: alert`1` -> alert`MARKER`
-	reTemplate := regexp.MustCompile(`(alert|confirm|prompt)\s*` + "`[^`]*`")
-	newPayload = reTemplate.ReplaceAllString(newPayload, fmt.Sprintf("${1}`%s`", marker))
+	// 2. Replace empty function calls: confirm(), alert(), prompt()
+	reEmpty := regexp.MustCompile(`(alert|confirm|prompt)\s*\(\s*\)`)
+	newPayload = reEmpty.ReplaceAllString(newPayload, fmt.Sprintf("${1}('%s')", marker))
 
-	// 3. Fallback: If no replacement happened but it looks like an executable payload,
-	// try to append a window assignment (e.g. for encoded payloads or complex JS)
+	// 3. Handle template strings: alert`1`, confirm``, alert`anything`
+	reTemplate := regexp.MustCompile("(alert|confirm|prompt)\\s*`[^`]*`")
+	newPayload = reTemplate.ReplaceAllString(newPayload, fmt.Sprintf("${1}('%s')", marker))
+
+	// 4. Handle wrapped calls: (confirm``), [confirm``], {confirm``}
+	reWrapped := regexp.MustCompile(`\((confirm|alert|prompt)` + "``" + `\)`)
+	newPayload = reWrapped.ReplaceAllString(newPayload, fmt.Sprintf("(${1}('%s'))", marker))
+
+	// 5. Handle array method calls: [8].find(confirm), [8].map(alert)
+	reArrayMethod := regexp.MustCompile(`\[(\d+)\]\.(find|map|some|every|filter|findIndex)\((confirm|alert|prompt)\)`)
+	newPayload = reArrayMethod.ReplaceAllString(newPayload, fmt.Sprintf("[${1}].${2}(function(){${3}('%s')})", marker))
+
+	// 6. Fallback: If no replacement happened, try to inject marker
 	if newPayload == payload {
-		// Only append if it looks like we can chain commands (has ; or is a script tag)
 		if strings.Contains(payload, "<script>") {
 			newPayload = strings.Replace(payload, "<script>", fmt.Sprintf("<script>window['%s']=true;", marker), 1)
+		} else if strings.Contains(payload, "onerror=") {
+			// Handle onerror handlers
+			newPayload = strings.Replace(payload, "onerror=", fmt.Sprintf("onerror=window['%s']=true;", marker), 1)
+		} else if strings.Contains(payload, "onload=") {
+			newPayload = strings.Replace(payload, "onload=", fmt.Sprintf("onload=window['%s']=true;", marker), 1)
 		} else if strings.Contains(payload, ";") {
 			newPayload = payload + fmt.Sprintf(";window['%s']=true;", marker)
 		}
