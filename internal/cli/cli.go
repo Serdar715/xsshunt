@@ -808,7 +808,7 @@ func runGXSSMode(targetURLs []string, proxyURL, cookies string, headers map[stri
 		// Eğer yansıyan parametreler varsa, GXSS ile payload testi yap
 		var reflectedParams []scanner.KXSSResult
 		for _, r := range kxssResults {
-			if r.Reflected && len(r.SuggestedPayloads) > 0 {
+			if r.Reflected {
 				reflectedParams = append(reflectedParams, r)
 			}
 		}
@@ -830,11 +830,17 @@ func runGXSSMode(targetURLs []string, proxyURL, cookies string, headers map[stri
 			for _, param := range reflectedParams {
 				color.Cyan("\n  Testing parameter: %s (Context: %s)", param.Parameter, param.Context)
 				
+				// Payloadları al (eğer boşsa varsayılanları kullan)
+				payloadsToTest := param.SuggestedPayloads
+				if len(payloadsToTest) == 0 {
+					payloadsToTest = scanner.GetPayloadsForContext(param.Context, param.FilteredChars)
+				}
+				
 				// Önerilen payloadları GXSS config'ine ekle
-				gxssConfig.Payloads = param.SuggestedPayloads
+				gxssConfig.Payloads = payloadsToTest
 				
 				// Payloadları test et
-				for _, payload := range param.SuggestedPayloads {
+				for _, payload := range payloadsToTest {
 					color.White("    Testing: %s", payload)
 					
 					// Manuel payload testi

