@@ -46,6 +46,12 @@
 *   **SSTI & Open Redirect:** Additional scanning modules for template injection and unvalidated redirects.
 *   **Security Headers:** Checks for CSP, HSTS, and X-Frame-Options misconfigurations.
 
+### 🆕 v2.3 KXSS/GXSS Integration (NEW)
+*   **KXSS Mode:** Smart parameter reflection testing with context detection (script, attribute, html, url).
+*   **GXSS Mode:** Fast payload testing based on KXSS context-aware suggestions.
+*   **Context-Aware Payloads:** Automatically selects best payloads based on reflection context and filtered characters.
+*   **60+ Common Parameters:** Tests all common XSS parameter names automatically.
+
 ### 🆕 v2.2 Refactoring Updates (Advanced)
 *   **Rod Page Pool:** Integrated highly efficient browser page pooling to drastically reduce memory/CPU usage during heavy scans.
 *   **Smart Context Mutator:** Automatically fixes broken payloads based on reflection context (e.g. `"><script>` vs `';alert(1)//`).
@@ -110,6 +116,18 @@ xsshunt --url "https://example.com/dashboard" \
 xsshunt --url "https://target.com/param?id=1" --ssti --open-redirect
 ```
 
+**KXSS/GXSS Mode (Smart Payload Testing):**
+```bash
+# Default mode - KXSS analysis + GXSS payload testing
+xsshunt "https://example.com/search?q=test"
+
+# Only KXSS analysis (no payload testing)
+xsshunt "https://example.com/search?q=test" --gxss=false
+
+# Test all common parameters
+xsshunt "https://example.com/page" --test-all-params
+```
+
 **Header Fuzzing:**
 Test specific headers for injection vulnerabilities:
 ```bash
@@ -142,6 +160,11 @@ xsshunt -l targets.txt -o report.html --format html --threads 10
 | `-v, --visible` | Run browser in visible mode (for debugging) |
 | `--verbose` | Enable verbose logging |
 | `--silent` | Silence all output except findings |
+| `--kxss` | Enable KXSS mode - smart payload suggestion (Default: `true`) |
+| `--gxss` | Enable GXSS mode - test suggested payloads (Default: `true`) |
+| `--test-all-params` | Test all common XSS parameters (Default: `true`) |
+| `--ssti` | Scan for Server-Side Template Injection |
+| `--open-redirect` | Scan for Open Redirect vulnerabilities |
 
 ---
 
