@@ -75,6 +75,9 @@ type ScanConfig struct {
 	StrictVerification bool // Vulnerable only if execution (alert) is confirmed
 	StaticOnly         bool // Perform only static analysis (no browser)
 	OnlyVerified       bool // Report only confirmed vulnerabilities
+
+	// Encoding Options
+	EncodeCustomPayloads bool // Apply encoding/obfuscation to custom payloads (-p)
 }
 
 // Vulnerability represents a detected XSS vulnerability

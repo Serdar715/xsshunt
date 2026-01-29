@@ -257,7 +257,7 @@ func (a *Analyzer) determineContext(body string, idx int, canary string) Context
 	}
 
 	// Look backwards from the injection point
-	start := idx - 500
+	start := idx - ContextLookbackChars
 	if start < 0 {
 		start = 0
 	}

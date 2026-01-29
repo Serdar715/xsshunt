@@ -9,6 +9,30 @@ const (
 	DefaultTimeout         = 30 * time.Second
 	DefaultThreads         = 5
 
+	// HTTP and Response limits
+	MaxResponseBodySize    = 1 << 20 // 1 MB - maximum response body to read
+	PageCleanupTimeout     = 2 * time.Second
+	ContextLookbackChars   = 500 // Characters to look back for context detection
+
+	// Retry configuration
+	MaxBrowserRetries  = 3
+	BrowserRetryDelay  = 500 * time.Millisecond
+	MaxHTTPRetries     = 2
+	HTTPRetryDelay     = 200 * time.Millisecond
+
+	// Connection pool settings
+	MaxIdleConns        = 1000
+	MaxIdleConnsPerHost = 500
+	MaxConnsPerHost     = 500
+	IdleConnTimeout     = 90 * time.Second
+	DialTimeout         = 10 * time.Second
+	KeepAliveInterval   = 30 * time.Second
+	TLSHandshakeTimeout = 10 * time.Second
+	ResponseHeaderTimeout = 20 * time.Second
+
+	// Page pool multiplier (Threads * this = pool size)
+	PagePoolMultiplier = 2
+
 	// Detection thresholds
 	EvidenceContextRadius   = 50
 	ContextDetectionRadius  = 100

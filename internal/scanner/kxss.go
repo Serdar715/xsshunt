@@ -4,6 +4,7 @@
 package scanner
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
@@ -55,6 +56,7 @@ type KXSSResult struct {
 type KXSSScanner struct {
 	config *KXSSConfig
 	client *http.Client
+	ctx    context.Context // Context for cancellation support
 }
 
 // NewKXSSScanner creates a new KXSS scanner
@@ -121,8 +123,10 @@ func GetCommonParameters() []string {
 	}
 }
 
-// ScanURL performs KXSS-style scanning on a URL
-func (k *KXSSScanner) ScanURL(targetURL string) ([]KXSSResult, error) {
+// ScanURL performs KXSS-style scanning on a URL with context support
+func (k *KXSSScanner) ScanURL(ctx context.Context, targetURL string) ([]KXSSResult, error) {
+	k.ctx = ctx
+
 	parsedURL, err := url.Parse(targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid URL: %w", err)
@@ -135,8 +139,14 @@ func (k *KXSSScanner) ScanURL(targetURL string) ([]KXSSResult, error) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	// Test existing parameters
+	// Test existing parameters with context cancellation check
 	for paramName := range existingParams {
+		select {
+		case <-ctx.Done():
+			return results, ctx.Err()
+		default:
+		}
+
 		wg.Add(1)
 		go func(param string) {
 			defer wg.Done()
@@ -158,6 +168,13 @@ func (k *KXSSScanner) ScanURL(targetURL string) ([]KXSSResult, error) {
 			go func() {
 				defer wg.Done()
 				for param := range paramChan {
+					// Check for context cancellation
+					select {
+					case <-ctx.Done():
+						return
+					default:
+					}
+
 					// Skip if already tested
 					if existingParams.Get(param) != "" {
 						continue
@@ -193,6 +210,15 @@ func (k *KXSSScanner) testParameter(targetURL, paramName string) KXSSResult {
 		Parameter: paramName,
 	}
 
+	// Check context cancellation early
+	if k.ctx != nil {
+		select {
+		case <-k.ctx.Done():
+			return result
+		default:
+		}
+	}
+
 	// Generate unique probe
 	probe := generateKXSSProbe()
 
@@ -207,8 +233,13 @@ func (k *KXSSScanner) testParameter(targetURL, paramName string) KXSSResult {
 	parsedURL.RawQuery = params.Encode()
 	testURL := parsedURL.String()
 
-	// Make request
-	req, err := http.NewRequest("GET", testURL, nil)
+	// Make request with context support
+	var req *http.Request
+	if k.ctx != nil {
+		req, err = http.NewRequestWithContext(k.ctx, "GET", testURL, nil)
+	} else {
+		req, err = http.NewRequest("GET", testURL, nil)
+	}
 	if err != nil {
 		return result
 	}
@@ -221,7 +252,7 @@ func (k *KXSSScanner) testParameter(targetURL, paramName string) KXSSResult {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodySize))
 	if err != nil {
 		return result
 	}

@@ -80,6 +80,9 @@ var (
 	kxssMode       bool
 	gxssMode       bool
 	testAllParams  bool
+
+	// Encoding options
+	encodeCustomPayloads bool
 )
 
 func Execute() error {
@@ -311,6 +314,7 @@ Features:
 				StrictVerification: strictVerification,
 				StaticOnly:         staticOnly,
 				OnlyVerified:       onlyVerified,
+				EncodeCustomPayloads: encodeCustomPayloads,
 			}
 
 			// Print configuration summary
@@ -494,6 +498,9 @@ Features:
 	rootCmd.Flags().BoolVar(&kxssMode, "kxss", true, "Enable KXSS mode (smart payload suggestion based on context)")
 	rootCmd.Flags().BoolVar(&gxssMode, "gxss", true, "Enable GXSS mode (test suggested payloads from KXSS)")
 	rootCmd.Flags().BoolVar(&testAllParams, "test-all-params", true, "Test all common parameters (for KXSS mode)")
+
+	// Encoding flags
+	rootCmd.Flags().BoolVar(&encodeCustomPayloads, "encode", false, "Apply encoding/obfuscation to custom payloads (-p). Built-in payloads are always encoded.")
 
 	return rootCmd.Execute()
 }
@@ -768,7 +775,7 @@ func runKXSSMode(targetURLs []string, proxyURL, cookies string, headers map[stri
 
 	for _, targetURL := range targetURLs {
 		color.Cyan("\n[*] Running KXSS scan on: %s", targetURL)
-		results, err := kxssScanner.ScanURL(targetURL)
+		results, err := kxssScanner.ScanURL(context.Background(), targetURL)
 		if err != nil {
 			color.Red("[!] Error scanning %s: %v", targetURL, err)
 			continue
@@ -796,7 +803,7 @@ func runGXSSMode(targetURLs []string, proxyURL, cookies string, headers map[stri
 
 	for _, targetURL := range targetURLs {
 		color.Cyan("\n[*] Running KXSS analysis on: %s", targetURL)
-		kxssResults, err := kxssScanner.ScanURL(targetURL)
+		kxssResults, err := kxssScanner.ScanURL(ctx, targetURL)
 		if err != nil {
 			color.Red("[!] Error in KXSS scan %s: %v", targetURL, err)
 			continue

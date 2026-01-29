@@ -31,7 +31,6 @@ import (
 // Constants are imported from constants.go (same package)
 
 // Scanner is the main XSS scanner with proxy and auth support
-// Scanner is the main XSS scanner with proxy and auth support
 type Scanner struct {
 	config      *config.ScanConfig
 	ctx         context.Context // Main context for cancellation
@@ -50,6 +49,11 @@ type Scanner struct {
 
 	// Strategy for XSS verification (Approach C)
 	strategy VerificationStrategy
+
+	// Maintainable architecture components
+	reporter      VulnReporter          // Abstracted vulnerability reporting
+	healthChecker *BrowserHealthChecker // Circuit breaker for browser operations
+	cleanupErrors *ErrorAggregator      // Collect async cleanup errors
 }
 
 // New creates a new XSS scanner instance with Rod and hybrid support
@@ -94,12 +98,17 @@ func New(cfg *config.ScanConfig) (*Scanner, error) {
 
 	browser := rod.New().ControlURL(controlURL).MustConnect()
 
-	// Initialize Page Pool (limit to Threads count * 2 to avoid memory explosion)
+	// Initialize Page Pool (limit to Threads count * PagePoolMultiplier to avoid memory explosion)
 	// This reuses pages instead of creating/destroying them constantly
-	pagePool := rod.NewPagePool(cfg.Threads * 2)
+	pagePool := rod.NewPagePool(cfg.Threads * PagePoolMultiplier)
 
 	// Create WAF detector
 	wafDet := waf.NewDetectorWithProxy(cfg.ProxyURL, cfg.Cookies, cfg.Headers)
+
+	// Initialize maintainable components
+	reporter := NewConsoleReporter(cfg.Verbose)
+	healthChecker := NewBrowserHealthChecker(DefaultBrowserHealthConfig())
+	cleanupErrors := NewErrorAggregator()
 
 	scanner := &Scanner{
 		config:      cfg,
@@ -125,6 +134,10 @@ func New(cfg *config.ScanConfig) (*Scanner, error) {
 			time.Duration(cfg.NavigationDelay)*time.Millisecond,
 			time.Duration(cfg.BrowserWaitTime)*time.Millisecond,
 		),
+		// Maintainable components
+		reporter:      reporter,
+		healthChecker: healthChecker,
+		cleanupErrors: cleanupErrors,
 	}
 
 	return scanner, nil
@@ -172,11 +185,16 @@ func (s *Scanner) Scan() (*config.ScanResult, error) {
 	// Get payloads
 	var payloadList []string
 	if s.config.PayloadFile != "" {
-		payloadList, err = s.payloadGen.LoadFromFile(s.config.PayloadFile)
+		// Custom payloads - use encoding if --encode flag is set
+		payloadList, err = s.payloadGen.LoadFromFileWithEncoding(s.config.PayloadFile, s.config.EncodeCustomPayloads)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load payloads: %w", err)
 		}
+		if s.config.EncodeCustomPayloads && !s.config.Silent {
+			color.Yellow("[*] Encoding applied to custom payloads")
+		}
 	} else {
+		// Built-in payloads - always encoded
 		payloadList = s.payloadGen.GetPayloads(s.results.WAFDetected)
 	}
 
@@ -246,6 +264,13 @@ func (s *Scanner) worker(wg *sync.WaitGroup, jobs <-chan string, baseURL, paramN
 	defer wg.Done()
 
 	for payload := range jobs {
+		// Check for cancellation
+		select {
+		case <-s.ctx.Done():
+			return
+		default:
+		}
+
 		s.applyRateLimit()
 
 		s.mu.Lock()
@@ -273,38 +298,31 @@ func (s *Scanner) worker(wg *sync.WaitGroup, jobs <-chan string, baseURL, paramN
 		}
 
 		if vuln != nil {
-			vulnKey := s.generateVulnKey(vuln)
-			s.mu.Lock()
-			if !s.seenVulns[vulnKey] {
-				s.seenVulns[vulnKey] = true
-				s.results.Vulnerabilities = append(s.results.Vulnerabilities, *vuln)
-				vulnCount := len(s.results.Vulnerabilities)
-				s.mu.Unlock()
-
-				// Real-time vulnerability reporting
-				color.Red("\n  ╔══════════════════════════════════════════════════════════╗")
-				color.Red("  ║  🔴 XSS VULNERABILITY FOUND! (#%d)                        ║", vulnCount)
-				color.Red("  ╚══════════════════════════════════════════════════════════╝")
-				color.Yellow("  Type:      %s", vuln.Type)
-				color.White("  Severity:  %s", vuln.Severity)
-				color.White("  Parameter: %s", vuln.Parameter)
-				color.White("  Context:   %s", vuln.Context)
-
-				if vuln.Verified {
-					color.Green("  Verified:  ✅ YES (Method: %s)", vuln.Method)
-				} else {
-					color.Yellow("  Verified:  ⚠️ NO (Reflection Only) - Check Manually")
-				}
-
-				fmt.Println()
-				color.Cyan("  Payload: %s", vuln.Payload)
-				color.Cyan("  PoC URL: %s", vuln.URL)
-				fmt.Println()
-			} else {
-				s.mu.Unlock()
-			}
+			s.recordVulnerability(vuln)
 		}
 	}
+}
+
+// recordVulnerability safely records a vulnerability and delegates reporting.
+// This method is thread-safe and fixes the race condition issue.
+func (s *Scanner) recordVulnerability(vuln *config.Vulnerability) {
+	vulnKey := s.generateVulnKey(vuln)
+
+	s.mu.Lock()
+	// Check if already seen
+	if s.seenVulns[vulnKey] {
+		s.mu.Unlock()
+		return
+	}
+
+	// Record as seen
+	s.seenVulns[vulnKey] = true
+	s.results.Vulnerabilities = append(s.results.Vulnerabilities, *vuln)
+	vulnCount := len(s.results.Vulnerabilities)
+	s.mu.Unlock() // Unlock before reporting to avoid blocking
+
+	// Delegate reporting to VulnReporter (thread-safe internally)
+	s.reporter.Report(vuln, vulnCount)
 }
 
 // CheckReflection moved to analyzer.go
@@ -384,33 +402,46 @@ func (scanner *Scanner) prepareContext(testURL, payload, paramName, marker strin
 
 // Helper: Setup Browser Page
 func (s *Scanner) setupBrowserPage(urlStr string) (*rod.Page, func(), error) {
+	// Check browser health before acquiring page
+	if !s.healthChecker.IsHealthy() {
+		return nil, nil, fmt.Errorf("browser circuit breaker open - too many failures")
+	}
+
 	// Use Page Pool to reuse pages (Drastic RAM reduction)
 	// rod.NewPagePool returns Pool[rod.Page], so we work with *rod.Page pointers
 	page, err := s.pagePool.Get(func() (*rod.Page, error) {
 		p, err := s.browser.Page(proto.TargetCreateTarget{URL: ""})
 		if err != nil {
+			s.healthChecker.RecordFailure()
 			return nil, err
 		}
 		return p, nil
 	})
 
 	if err != nil {
+		s.healthChecker.RecordFailure()
 		return nil, nil, fmt.Errorf("failed to acquire page from pool: %w", err)
 	}
+
+	// Record success for health checker
+	s.healthChecker.RecordSuccess()
 
 	// Cleanup helper (Return to pool instead of closing)
 	disconnect := func() {
 		// Stop any pending navigation/scripts
 		// We use a separate context to ensure cleanup happens
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), PageCleanupTimeout)
 			defer cancel()
 
 			// Try to navigate to blank to stop heavy scripts before putting back
 			// This prevents a "dirty" page from consuming CPU in the pool
 			if page != nil {
 				p := page.Context(ctx)
-				_ = p.StopLoading()
+				if err := p.StopLoading(); err != nil {
+					// Collect cleanup errors instead of ignoring
+					s.cleanupErrors.AddWithContext("page cleanup", err)
+				}
 				s.pagePool.Put(page)
 			}
 		}()
@@ -421,7 +452,7 @@ func (s *Scanner) setupBrowserPage(urlStr string) (*rod.Page, func(), error) {
 	// Set Page Timeout
 	timeout := time.Duration(s.config.Timeout) * time.Second
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = DefaultTimeout
 	}
 
 	// Bind context to page

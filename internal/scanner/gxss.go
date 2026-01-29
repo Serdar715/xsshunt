@@ -305,7 +305,7 @@ func (g *GXSSScanner) testPayload(ctx context.Context, targetURL, paramName, pay
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxResponseBodySize))
 	if err != nil {
 		return result
 	}

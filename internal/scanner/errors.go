@@ -4,6 +4,8 @@ package scanner
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 )
 
 // Sentinel errors for common error conditions
@@ -105,3 +107,101 @@ func IsRetryable(err error) bool {
 
 	return false
 }
+
+// ErrorAggregator collects errors from multiple goroutines safely.
+// This is useful for async operations where errors would otherwise be lost.
+type ErrorAggregator struct {
+	errors []error
+	mu     sync.Mutex
+}
+
+// NewErrorAggregator creates a new error aggregator instance.
+func NewErrorAggregator() *ErrorAggregator {
+	return &ErrorAggregator{
+		errors: make([]error, 0),
+	}
+}
+
+// Add appends an error to the aggregator if it's not nil.
+// Thread-safe for concurrent access.
+func (ea *ErrorAggregator) Add(err error) {
+	if err == nil {
+		return
+	}
+	ea.mu.Lock()
+	ea.errors = append(ea.errors, err)
+	ea.mu.Unlock()
+}
+
+// AddWithContext adds an error with additional context information.
+func (ea *ErrorAggregator) AddWithContext(context string, err error) {
+	if err == nil {
+		return
+	}
+	ea.Add(fmt.Errorf("%s: %w", context, err))
+}
+
+// Errors returns a copy of all collected errors.
+// Returns nil if no errors were collected.
+func (ea *ErrorAggregator) Errors() []error {
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
+
+	if len(ea.errors) == 0 {
+		return nil
+	}
+
+	// Return a copy to prevent external modification
+	result := make([]error, len(ea.errors))
+	copy(result, ea.errors)
+	return result
+}
+
+// HasErrors returns true if any errors have been collected.
+func (ea *ErrorAggregator) HasErrors() bool {
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
+	return len(ea.errors) > 0
+}
+
+// Count returns the number of collected errors.
+func (ea *ErrorAggregator) Count() int {
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
+	return len(ea.errors)
+}
+
+// Clear removes all collected errors.
+func (ea *ErrorAggregator) Clear() {
+	ea.mu.Lock()
+	ea.errors = make([]error, 0)
+	ea.mu.Unlock()
+}
+
+// Error implements the error interface for ErrorAggregator.
+// Returns a combined error message if errors exist, empty string otherwise.
+func (ea *ErrorAggregator) Error() string {
+	ea.mu.Lock()
+	defer ea.mu.Unlock()
+
+	if len(ea.errors) == 0 {
+		return ""
+	}
+
+	var messages []string
+	for _, err := range ea.errors {
+		messages = append(messages, err.Error())
+	}
+
+	return fmt.Sprintf("%d errors occurred: [%s]", len(ea.errors), strings.Join(messages, "; "))
+}
+
+// Combined returns a single error that wraps all collected errors.
+// Returns nil if no errors were collected.
+func (ea *ErrorAggregator) Combined() error {
+	if !ea.HasErrors() {
+		return nil
+	}
+	return fmt.Errorf(ea.Error())
+}
+
